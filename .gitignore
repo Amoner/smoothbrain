@@ -1,0 +1,17 @@
+# Built zips; they go to CurseForge, not into the repository.
+dev/dist/
+
+# The CurseForge API token for dev/release.py. Never commit it.
+dev/curseforge.env
+.env
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors and leftovers
+*.bak
+.vscode/
+.idea/

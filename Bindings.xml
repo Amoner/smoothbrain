@@ -1,0 +1,5 @@
+<Bindings>
+ <Binding name="SMOOTHBRAIN_LOCK" category="Smooth Brain">
+  SmoothBrain_ToggleLock()
+ </Binding>
+</Bindings>
