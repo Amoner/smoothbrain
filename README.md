@@ -49,7 +49,7 @@ a list without the icon column shows no markers.
 | gold coin | vendor it | costs little more to buy again than a vendor pays |
 | gavel | auction it | worth clearly more than a vendor pays |
 | Disenchant icon | disenchant it | green or better gear worth more as enchanting materials |
-| green tick | keep it | the same, for things you use up (potions, food, bandages); also things a vendor won't buy |
+| green tick | keep it | the same, for things you use up (potions, food, bandages); things a vendor won't buy; gear in one of your equipment sets; your class's reagents |
 | yellow ! | keep it for its quest | a quest item whose quest isn't done, or an item a RestedXP guide needs that isn't cheap to get back |
 | red cross | safe to delete | a quest item whose quests are all done, that vendors don't buy |
 | padlock | keep it (you locked it) | an item you locked yourself; see below |
@@ -80,6 +80,24 @@ something else for you (push-to-talk, say). The command and the key still work.
 
 The middle-click and the key go by the item whose tooltip is showing, so they
 work in any bag addon, including ones Smooth Brain puts no markers in.
+
+## Equipment sets and your class's reagents
+
+Two kinds of item are kept without being priced, because you carry them to
+use. Both show the green tick, and the tooltip says which it is.
+
+- **Gear in one of your equipment sets** (the game's Equipment Manager).
+  Whatever a set holds is kept; the tooltip names the set. Take a piece out of
+  the set and it is priced again. `/smooth sets off` prices all of it.
+- **Your own class's reagents:** a shaman's Ankhs, a mage's runes and Arcane
+  Powder, a priest's candles, a paladin's symbols, a druid's seeds, a
+  warlock's Soul Shards, a rogue's powders and poisons, and the like. Another
+  class's reagents are priced like anything else: a warrior's Light Feathers
+  are still ones to sell. `/smooth reagents off` prices yours as well.
+
+Both go by the kind of item, not the copy: a second pair of the gloves that
+are in your set is kept too. A lock counts for more than either (the padlock
+shows), and an item you `/smooth ignore` gets no marker at all.
 
 ## The rule
 
@@ -252,6 +270,8 @@ gets the padlock.
     /smooth prices both     whose prices: tsm, auctionator or both
     /smooth lock [item]     keep this item whatever it is worth; again to unlock; alone, lists them
     /smooth lockclick on|off  whether a middle-click on an item locks and unlocks it
+    /smooth sets on|off     keep gear that is in one of your equipment sets
+    /smooth reagents on|off  keep your own class's reagents
     /smooth ignore [item]   never judge this item; again to undo; alone, lists them
     /smooth drop            flash and list the stacks you'd lose least by deleting
     /smooth flash on|off    do that by itself when your bags are full

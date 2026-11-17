@@ -1195,6 +1195,146 @@ do
     and Mark(pick) == nil and Mark(hide) == QUEST, #ids)
 end
 
+-- Kept without being priced: gear in one of your equipment sets
+do
+  Check("both rules are on unless you turn them off", SmoothBrainDB.sets == true and SmoothBrainDB.reagents == true)
+  local glovesWas, dustWas, junkWas = Verdict(130), Verdict(131), Verdict(113)
+  -- What the game says of your sets: item IDs by the slot they are worn in, with 0 and -1 for slots a set leaves out.
+  local SETS = { [3] = { name = "Tank", items = { [1] = 0, [10] = 130, [16] = -1 } }, [7] = { name = "", items = { [10] = 131 } } }
+  local locationsAsked = 0
+  C_EquipmentSet = {
+    GetEquipmentSetIDs = function()
+      local ids = {}
+      for id in pairs(SETS) do ids[#ids + 1] = id end
+      table.sort(ids)
+      return ids
+    end,
+    GetEquipmentSetInfo = function(id) return SETS[id].name, 132 end,
+    GetItemIDs = function(id) return SETS[id].items end,
+    GetItemLocations = function() locationsAsked = locationsAsked + 1 return {} end,
+  }
+  Check("gear is priced like anything else until the game says it is in a set", glovesWas ~= "keep/set" and dustWas == "disenchant/dust"
+    and Verdict(130) == glovesWas, glovesWas)
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("gear in one of your equipment sets is kept, whatever it is worth", Verdict(130) == "keep/set" and Verdict(131) == "keep/set"
+    and ns.Check(130).set == "Tank" and ns.Check(131).set == nil, Verdict(130))
+  Check("...with the tick, in every kind of bag", Mark(dustGloves) == TICK and Shows(130, TICK) and Shows(131, TICK), tostring(Mark(dustGloves)))
+  local tip = Tip(130)
+  results[#results + 1] = "INFO  tooltip, gloves in an equipment set:\n        " .. tip
+  Check("the tooltip names the set, and says how to turn the rule off", tip:find("keep it", 1, true) ~= nil
+    and tip:find('your equipment set "Tank"', 1, true) ~= nil and tip:find("/smooth sets off", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
+  Check("a set the game gives no name for is still a set", Tip(131):find("one of your equipment sets", 1, true) ~= nil, Tip(131))
+  Check("other gear is still priced", Verdict(133) ~= "keep/set" and Verdict(145) ~= "keep/set", Verdict(133))
+  Check("where each piece is isn't asked: on WoW Forever that can crash the game", locationsAsked == 0, locationsAsked)
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("all")
+  Check("/smooth all lists it as kept", table.concat(printed, "\n"):find("[Item130] x1: |cffffffffkeep it|r. It is in your equipment set", 1, true) ~= nil)
+  -- Anything the game says is in a set counts, gray junk included; and what is kept never flashes.
+  SETS[3].items[5] = 113
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Fire("UI_ERROR_MESSAGE", 20, ERR_INV_FULL)
+  Check("bags full: a stack in a set never flashes as one to throw away", junkWas == "vendor/junk" and Verdict(113) == "keep/set"
+    and not Glows(junkSlot), junkWas)
+  RunTimers()
+  SETS[3].items[5] = nil
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("taking an item out of the set prices it again", Verdict(113) == junkWas and Verdict(130) == "keep/set", Verdict(113))
+  SlashCmdList.SMOOTHBRAIN("lock 130")
+  Check("locking counts for more than the set: the padlock", Verdict(130) == "locked/locked")
+  SlashCmdList.SMOOTHBRAIN("unlock 130")
+  SlashCmdList.SMOOTHBRAIN("ignore 130")
+  Check("an ignored item gets no marker, set or not", Verdict(130) == "nil" and SmoothBrainDB.ignore[130] == true)
+  SlashCmdList.SMOOTHBRAIN("ignore 130")
+  Check("...and is kept again once it isn't ignored", Verdict(130) == "keep/set" and SmoothBrainDB.ignore[130] == false)
+  SmoothBrainDB.ignore[130] = nil
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("sets off")
+  Check("/smooth sets off: set gear is priced like the rest", SmoothBrainDB.sets == false and Verdict(130) == glovesWas
+    and Verdict(131) == dustWas and Mark(dustGloves) == DUST and printed[1]:find("equipment sets: off", 1, true) ~= nil, printed[1])
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("sets")
+  Check("/smooth sets alone says which it is", printed[1]:find("off. /smooth sets on|off", 1, true) ~= nil, printed[1])
+  SlashCmdList.SMOOTHBRAIN("sets on")
+  Check("/smooth sets on", SmoothBrainDB.sets == true and Verdict(130) == "keep/set" and Mark(dustGloves) == TICK)
+  -- The game's answer in a shape this wasn't written for: nothing is in a set, and nothing breaks.
+  local itemIDs = C_EquipmentSet.GetItemIDs
+  C_EquipmentSet.GetItemIDs = function() error("changed") end
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("a game that answers differently: gear is priced as before, without an error", Verdict(130) == glovesWas and Verdict(131) == dustWas)
+  C_EquipmentSet.GetItemIDs = function() return "not a list" end
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("...whatever it answers", Verdict(130) == glovesWas)
+  C_EquipmentSet.GetItemIDs = itemIDs
+  C_EquipmentSet.GetEquipmentSetIDs = function() return nil end
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("a character with no sets", Verdict(130) == glovesWas and Verdict(131) == dustWas)
+  C_EquipmentSet = nil
+  Fire("EQUIPMENT_SETS_CHANGED")
+  Check("a client without equipment sets", Verdict(130) == glovesWas and Mark(dustGloves) == DUST)
+end
+
+-- Kept without being priced: what your class casts with
+do
+  -- Ankh (a shaman's), Arcane Powder (a mage's), Instant Poison and Flash Powder (a rogue's): all sold by vendors
+  -- and listed on the auction house for much more than a vendor pays back.
+  for _, id in ipairs({ 17030, 17020, 6947, 5140 }) do
+    ITEMS[id] = { 500, 0 }
+    PRICES.vendorbuy[id], PRICES.dbminbuyout[id], PRICES.dbnumauctions[id] = 2000, 1500, 50
+  end
+  ITEMS[6947][4] = 0   -- a poison is a consumable
+  local first = #BAGS[0] + 1
+  BAGS[0][first], BAGS[0][first + 1], BAGS[0][first + 2], BAGS[0][first + 3] = { 17030, 5 }, { 17020, 5 }, { 6947, 5 }, { 5140, 5 }
+  local ankh = Button(0, 17030, first)
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  ankh:Update()
+  Check("the case reported: Ankhs are marked to auction", Verdict(17030) == "auction/costly" and Mark(ankh) == GAVEL, Verdict(17030))
+  local CLASS = "SHAMAN"
+  function UnitClass(unit) return unit == "player" and "Schamane" or nil, unit == "player" and CLASS or nil end
+  Fire("SKILL_LINES_CHANGED")
+  Check("your own class's reagents are kept, whatever they are worth", Verdict(17030) == "keep/reagent" and Mark(ankh) == TICK
+    and Shows(17030, TICK), Verdict(17030))
+  Check("another class's are priced like anything else", Verdict(17020) == "auction/costly" and Verdict(5140) == "auction/costly"
+    and Verdict(6947) == "keep/costly", Verdict(17020))
+  local tip = Tip(17030)
+  results[#results + 1] = "INFO  tooltip, a shaman's Ankhs:\n        " .. tip
+  Check("the tooltip says why, and how to turn the rule off", tip:find("keep it", 1, true) ~= nil
+    and tip:find("Your class uses it", 1, true) ~= nil and tip:find("/smooth reagents off", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
+  Fire("UI_ERROR_MESSAGE", 20, ERR_INV_FULL)
+  Check("bags full: your reagents never flash as stacks to throw away", not Glows(ankh))
+  RunTimers()
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("reagents off")
+  Check("/smooth reagents off: they are priced like the rest", SmoothBrainDB.reagents == false and Verdict(17030) == "auction/costly"
+    and Mark(ankh) == GAVEL and printed[1]:find("reagents: off", 1, true) ~= nil, printed[1])
+  SlashCmdList.SMOOTHBRAIN("reagents on")
+  Check("/smooth reagents on", SmoothBrainDB.reagents == true and Verdict(17030) == "keep/reagent" and Mark(ankh) == TICK)
+  CLASS = "MAGE"
+  Fire("SKILL_LINES_CHANGED")
+  Check("a mage keeps Arcane Powder, and prices Ankhs", Verdict(17020) == "keep/reagent" and Verdict(17030) == "auction/costly")
+  CLASS = "ROGUE"
+  Fire("SKILL_LINES_CHANGED")
+  Check("a rogue keeps powders and poisons", Verdict(5140) == "keep/reagent" and Verdict(6947) == "keep/reagent"
+    and Verdict(17020) == "auction/costly")
+  CLASS = "WARRIOR"
+  Fire("SKILL_LINES_CHANGED")
+  Check("a class that casts with nothing keeps none of them for that", Verdict(17030) == "auction/costly" and Verdict(17020) == "auction/costly"
+    and Verdict(5140) == "auction/costly" and Verdict(6947) == "keep/costly")
+  CLASS = nil
+  Fire("SKILL_LINES_CHANGED")
+  Check("while the game doesn't say what you are, nothing is kept as a reagent", Verdict(17030) == "auction/costly")
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("help")
+  local help = table.concat(printed, "\n")
+  Check("/smooth help lists both commands", help:find("/smooth sets on|off", 1, true) ~= nil
+    and help:find("/smooth reagents on|off", 1, true) ~= nil)
+  UnitClass = nil
+  for offset = 3, 0, -1 do BAGS[0][first + offset] = nil end
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  Fire("SKILL_LINES_CHANGED")
+end
+
 -- The quest log itself: an item one of your quests asks for is kept, whatever else is known about it
 do
   local HAND_IN = "Its quest is complete: hand it in, and this item goes with it."

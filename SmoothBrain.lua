@@ -10,7 +10,8 @@
 -- to use). The verdict shows on item tooltips, as
 -- a marker on bag slots (Bagnon, Baganator, BetterBags, EllesmereUI and the
 -- game's own bags), and in the /smooth list. An item you lock (middle-click it, or
--- /smooth lock) is kept without being judged, and shows a padlock.
+-- /smooth lock) is kept without being judged, and shows a padlock. Gear in one
+-- of your equipment sets, and what your class casts with, is kept as well.
 --
 -- The decision itself is in Logic.lua; this file gathers the facts.
 local ADDON, ns = ...
@@ -25,6 +26,8 @@ local DEFAULTS = {
   ignore = {},     -- [itemID] = true: never judge it; false: judge it although it is a tool (/smooth ignore)
   locked = {},     -- [itemID] = true: yours to keep, whatever it is worth (middle-click it, or /smooth lock)
   lockclick = true, -- a middle-click on an item in your bags locks or unlocks it
+  sets = true,     -- keep gear that is in one of your equipment sets, whatever it is worth (/smooth sets)
+  reagents = true, -- keep what your class casts with, whatever it is worth (/smooth reagents)
 }
 local settings = DEFAULTS
 
@@ -63,6 +66,26 @@ local TOOLS = {
   [19022] = true,  -- Nat Pagle's Extreme Angler FC-5000
   [19970] = true,  -- Arcanite Fishing Pole
   [6948] = true,   -- Hearthstone
+}
+-- What each class carries to cast with: spell reagents, and a rogue's powders
+-- and poisons. Your own class's are kept whatever they would fetch; another
+-- class's are priced like anything else. (Hunters and warriors carry none;
+-- ammunition is left alone anyway.)
+local REAGENTS = {
+  DRUID = { 17021, 17026, 17034, 17035, 17036, 17037, 17038 },   -- Wild Berries, Wild Thornroot, and the five seeds
+  MAGE = { 17020, 17031, 17032, 17056 },   -- Arcane Powder, Rune of Teleportation, Rune of Portals, Light Feather
+  PALADIN = { 17033, 21177 },              -- Symbol of Divinity, Symbol of Kings
+  PRIEST = { 17028, 17029, 17056 },        -- Holy Candle, Sacred Candle, Light Feather
+  ROGUE = {
+    5140, 5530,                            -- Flash Powder, Blinding Powder
+    6947, 6949, 6950, 8926, 8927, 8928,    -- Instant Poison, every rank
+    2892, 2893, 8984, 8985, 20844,         -- Deadly Poison
+    3775, 3776,                            -- Crippling Poison
+    5237, 6951, 9186,                      -- Mind-numbing Poison
+    10918, 10920, 10921, 10922,            -- Wound Poison
+  },
+  SHAMAN = { 17030, 17057, 17058 },        -- Ankh, Shiny Fish Scales, Fish Oil
+  WARLOCK = { 6265, 5565, 16583 },         -- Soul Shard, Infernal Stone, Demonic Figurine
 }
 -- One marker per verdict, in the bottom left of the slot.
 local MARKS = {
@@ -542,6 +565,53 @@ local function Carried()
 end
 
 ---------------------------------------------------------------------------
+-- Kept without being priced: equipment sets, and what your class casts with
+---------------------------------------------------------------------------
+-- [itemID] = the name of the equipment set of yours it is in (true for a set
+-- with no name to give); read again when the sets change. Only the sets' item
+-- IDs are asked for. Where each piece is (C_EquipmentSet.GetItemLocations)
+-- isn't needed here, and is left alone on purpose: on WoW Forever it is
+-- reported to crash the game for some sets.
+local setItems
+
+local function SetOf(itemID)
+  if not setItems then
+    setItems = {}
+    local sets = C_EquipmentSet
+    if type(sets) == "table" and sets.GetEquipmentSetIDs and sets.GetItemIDs then
+      -- If the game's answer isn't the shape this expects, no item is in a set.
+      pcall(function()
+        for _, setID in pairs(sets.GetEquipmentSetIDs() or {}) do
+          local name = sets.GetEquipmentSetInfo and sets.GetEquipmentSetInfo(setID)
+          for _, id in pairs(sets.GetItemIDs(setID) or {}) do
+            if type(id) == "number" and id > 0 and not setItems[id] then
+              setItems[id] = type(name) == "string" and name ~= "" and name or true
+            end
+          end
+        end
+      end)
+    end
+  end
+  return setItems[itemID]
+end
+
+local reagents, reagentsOf   -- [itemID] = true for your class's (REAGENTS), and the class they were worked out for
+
+local function Reagent(itemID)
+  local class = UnitClass and select(2, UnitClass("player"))   -- the second answer: "SHAMAN", whatever the language
+  if type(class) ~= "string" then
+    return false   -- the game doesn't say what you are yet
+  end
+  if class ~= reagentsOf then
+    reagents, reagentsOf = {}, class
+    for _, id in ipairs(REAGENTS[class] or {}) do
+      reagents[id] = true
+    end
+  end
+  return reagents[itemID] == true
+end
+
+---------------------------------------------------------------------------
 -- The verdict for an item you carry
 ---------------------------------------------------------------------------
 local verdicts = {}   -- [itemID] = { count, result or false }; emptied when quests or settings change
@@ -681,7 +751,9 @@ end
 -- tools, bags, ammunition and keys, items you /smooth ignore, and things you can
 -- trade that a vendor buys but that have no price to buy them known. An item
 -- you locked is not judged at all: it is kept, whatever it is (verdict
--- "locked"), and locking it counts for more than ignoring it.
+-- "locked"), and locking it counts for more than ignoring it. Gear in one of
+-- your equipment sets, and what your class casts with, is kept the same way,
+-- with the ordinary "keep": you carry those to use, so they aren't priced.
 function ns.Check(itemID)
   local locked = settings.locked[itemID]
   if settings.ignore[itemID] and not locked then
@@ -699,7 +771,14 @@ function ns.Check(itemID)
   if locked then
     result = { verdict = "locked", why = "locked", itemID = itemID, count = mine.count }
   else
-    result, later = Judge(itemID, mine)
+    local set = settings.sets and SetOf(itemID)
+    if set then
+      result = { verdict = "keep", why = "set", set = set ~= true and set or nil, itemID = itemID, count = mine.count }
+    elseif settings.reagents and Reagent(itemID) then
+      result = { verdict = "keep", why = "reagent", itemID = itemID, count = mine.count }
+    else
+      result, later = Judge(itemID, mine)
+    end
   end
   if not later then
     verdicts[itemID] = { count = mine.count, result = result or false }
@@ -1260,6 +1339,7 @@ local function Forget()
   verdicts = {}
   quantities = {}
   questLog = nil
+  setItems = nil
 end
 
 local ORDER = { vendor = 1, free = 2, disenchant = 3, auction = 4, keep = 5, quest = 6, locked = 7 }
@@ -1321,7 +1401,8 @@ local function List(everything)
   end
 end
 
-local function Toggle(name, label, value)
+-- rejudge: the setting changes verdicts, not only how they are shown.
+local function Toggle(name, label, value, rejudge)
   value = (value or ""):lower()
   if value ~= "on" and value ~= "off" then
     Say(("%s: %s. /smooth %s on|off"):format(label, settings[name] and "on" or "off", name))
@@ -1329,6 +1410,9 @@ local function Toggle(name, label, value)
   end
   settings[name] = value == "on"
   Say(("%s: %s."):format(label, value))
+  if rejudge then
+    Forget()
+  end
   RefreshIcons()
 end
 
@@ -1487,6 +1571,10 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     Lock(rest, command == "unlock")
   elseif command == "lockclick" then
     Toggle("lockclick", "Middle-click to lock or unlock an item", rest)
+  elseif command == "sets" then
+    Toggle("sets", "Keeping gear that is in one of your equipment sets", rest, true)
+  elseif command == "reagents" then
+    Toggle("reagents", "Keeping your class's reagents", rest, true)
   elseif command == "drop" then
     local stacks = FlashCheapest()
     if #stacks == 0 then
@@ -1514,6 +1602,10 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     print("  /smooth lock [item] - keep this item whatever it is worth (shift-click it); again to unlock; alone, lists them. "
       .. "A middle-click on an item in your bags does the same")
     print("  /smooth lockclick on|off - whether a middle-click locks and unlocks; now " .. (settings.lockclick and "on" or "off"))
+    print("  /smooth sets on|off - keep gear that is in one of your equipment sets, whatever it is worth; now "
+      .. (settings.sets and "on" or "off"))
+    print("  /smooth reagents on|off - keep your own class's spell reagents (and a rogue's poisons), whatever they are worth; now "
+      .. (settings.reagents and "on" or "off"))
     print("  /smooth ignore [item] - never judge this item (shift-click it); again to undo; alone, lists them")
     print("  /smooth icons on|off - the markers on bag slots: coin = vendor, gavel = auction, dust = disenchant, green tick = keep, "
       .. "yellow ! = keep for a quest, red cross = leftover quest item, safe to delete, padlock = locked by you")
@@ -1653,7 +1745,7 @@ end
 local frame = CreateFrame("Frame")
 for _, event in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "BAG_UPDATE", "BAG_UPDATE_DELAYED", "QUEST_ACCEPTED",
   "QUEST_REMOVED", "QUEST_TURNED_IN", "SKILL_LINES_CHANGED", "UI_ERROR_MESSAGE", "GLOBAL_MOUSE_DOWN",
-  "QUEST_LOG_UPDATE" }) do
+  "QUEST_LOG_UPDATE", "EQUIPMENT_SETS_CHANGED" }) do
   pcall(frame.RegisterEvent, frame, event)
 end
 frame:SetScript("OnEvent", function(_, event, name, extra)
@@ -1727,7 +1819,7 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
       ChooseStacks()   -- the bags changed but are still full: choose again, as stacks may have moved
     end
   else
-    -- A quest was taken, dropped or handed in, or a profession learned.
+    -- A quest was taken, dropped or handed in, a profession learned, or an equipment set changed.
     Forget()
     RefreshIcons()
   end

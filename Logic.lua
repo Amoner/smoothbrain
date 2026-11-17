@@ -257,6 +257,11 @@ function ns.Explain(result, Money)
   local what = result.doneNote or "its quest is done"
   if why == "locked" then
     return "Locked items are not judged. Middle-click it in your bags, or /smooth lock it, to unlock."
+  elseif why == "set" then
+    return (result.set and ("It is in your equipment set \"" .. result.set .. "\".") or "It is in one of your equipment sets.")
+      .. " Gear in a set is kept, not priced. /smooth sets off prices it like anything else."
+  elseif why == "reagent" then
+    return "Your class uses it, so it is kept, not priced. /smooth reagents off prices these like anything else."
   elseif why == "done" then
     return "A leftover: " .. what .. says .. ". Vendors don't buy it."
   elseif why == "leftover" then

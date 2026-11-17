@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.7
+
+- Gear in one of your equipment sets is now kept, whatever it is worth: it
+  gets the green tick, the tooltip names the set, and it never flashes when
+  your bags are full. `/smooth sets off` prices it like anything else.
+- Your own class's reagents are now kept instead of being marked to auction
+  or vendor: a shaman's Ankhs, a mage's runes, a priest's candles, a paladin's
+  symbols, a druid's seeds, a warlock's shards and stones, a rogue's powders
+  and poisons. Another class's reagents are still priced.
+  `/smooth reagents off` prices yours as well.
+
+Both were asked for in the comments on CurseForge.
+
 ## 2.6
 
 - Markers and the bags-full flash now work in EllesmereUI's bags, in its grid

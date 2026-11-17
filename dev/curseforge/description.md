@@ -9,7 +9,7 @@ For World of Warcraft: Forever.
 | Gold coin | **Vendor it** | It costs little more to buy again than a vendor pays. |
 | Gavel | **Auction it** | It is worth clearly more than a vendor pays. |
 | Disenchant icon | **Disenchant it** | Green or better gear worth more as enchanting materials. |
-| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, and things a vendor won't buy. |
+| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, things a vendor won't buy, gear in your equipment sets, and your class's reagents. |
 | Yellow ! | **Keep it for its quest** | A quest still needs it. |
 | Red cross | **Safe to delete** | A quest item whose quests are all done, that vendors don't buy. |
 | Padlock | **Keep it (you locked it)** | An item you locked yourself. It is kept whatever it is worth. |
@@ -19,6 +19,15 @@ For World of Warcraft: Forever.
 **Middle-click an item in your bags to lock it.** It gets a padlock, counts as one to keep whatever it is worth, and never flashes when your bags are full. Middle-click again to unlock. Use it for your pet's food, cloth you are saving, gear you still wear.
 
 `/smooth lock` with a shift-clicked item does the same, and Key Bindings has a key for it.
+
+## Kept for you
+
+Two kinds of item are kept without you locking them:
+
+- **Gear in one of your equipment sets.** The tooltip names the set.
+- **Your own class's reagents:** a shaman's Ankhs, a mage's runes, a priest's candles, a paladin's symbols, a druid's seeds, a warlock's shards, a rogue's powders and poisons. Another class's reagents are still priced.
+
+`/smooth sets off` and `/smooth reagents off` turn either rule off.
 
 ## The rule
 
@@ -52,6 +61,8 @@ A setup window opens the first time, and with `/smooth setup`. It checks your pr
     /smooth limit 50c       the largest difference you'd vendor at (50c, 5s, 1g 20s)
     /smooth prices both     whose prices: tsm, auctionator or both
     /smooth lock [item]     keep this item whatever it is worth; again to unlock
+    /smooth sets on|off     keep gear that is in one of your equipment sets
+    /smooth reagents on|off keep your own class's reagents
     /smooth ignore [item]   never judge this item; again to undo
     /smooth drop            flash and list the stacks you'd lose least by deleting
     /smooth flash on|off    do that by itself when your bags are full
@@ -61,6 +72,6 @@ A setup window opens the first time, and with `/smooth setup`. It checks your pr
 ## Limits
 
 - It judges money and quests only. It can't know the meat is your pet's food or the cloth is for First Aid. Lock those.
-- It can't tell soulbound gear you wear from gear you have replaced; both are **vendor it** until you lock the pieces you wear.
+- It can't tell soulbound gear you wear from gear you have replaced; both are **vendor it** until you lock the pieces you wear or put them in an equipment set.
 - TradeSkillMaster's prices are as fresh as your last login or `/reload`, Auctionator's as your last scan.
 - It reads RestedXP's and Questie's own tables. If an update to either changes them, that part goes quiet until Smooth Brain is updated.
