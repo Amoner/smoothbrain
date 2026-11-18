@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.8
+
+Two new rules. Both change what some of your items are marked as.
+
+- **New rule: soulbound things you use are kept.** Anything soulbound with a
+  Use of its own that you don't wear, such as the Cozy Sleeping Bag or a
+  mount, was marked to vendor because a vendor buys it. It now gets the green
+  tick, the tooltip says "soulbound, yours to use", and it never flashes when
+  your bags are full.
+- **New rule: the newest auction price wins.** For each item, the price now
+  comes from whichever addon saw it for sale last. Before, TradeSkillMaster's
+  came first and Auctionator's only filled in, although TradeSkillMaster's is
+  a snapshot: an hour old at best, and as old as your session is long.
+  Auctionator notes a price when you scan or search, but only the day, so on
+  the same day a newer snapshot is preferred.
+- **New price source: Forever Companion.** It notes prices as the auction
+  house shows them, to the second, so with it the tooltip matches what is
+  listed now. `/smooth companion off` leaves its prices out.
+
+Also:
+
+- The tooltip is one line now, not a paragraph: the item's marker, the
+  verdict, and the prices that decided it ("Auction it" on the left, "auction
+  5s 60c, vendor 4s 61c" on the right). Hold Shift over an item for the reason
+  in full. `/smooth tooltip full` always shows it, as before.
+- A price from your own scans now says whose it is: "Auctionator saw it
+  today", "Forever Companion saw it 3 days ago".
+
 ## 2.7
 
 - Gear in one of your equipment sets is now kept, whatever it is worth: it

@@ -110,6 +110,7 @@ local tooltipHook
 TooltipDataProcessor = { AddTooltipPostCall = function(_, fn) tooltipHook = fn end }
 -- The tooltip also says what the mouse is on: `hovered` is the item it shows, `owner` the button it belongs to.
 GameTooltip = { lines = {}, AddLine = function(self, text) self.lines[#self.lines + 1] = text end,
+  AddDoubleLine = function(self, left, right) self.lines[#self.lines + 1] = left .. "  >>  " .. right end,
   IsShown = function(self) return self.hovered ~= nil end,
   GetItem = function(self) return "x", self.hovered and ("|cffffffff|Hitem:" .. self.hovered .. ":::|h[x]|h|r") or nil end,
   GetOwner = function(self) return self.owner end }
@@ -118,6 +119,8 @@ local function Hover(itemID, mouseElsewhere)
   GameTooltip.owner = itemID and { IsMouseOver = function() return not mouseElsewhere end } or nil
 end
 ItemRefTooltip = {}
+local SHIFT = false
+function IsShiftKeyDown() return SHIFT end
 
 -- Items: [id] = { vendor sell price, bind type, quality (1), class (7, trade goods), subclass (0), equip slot ("") }
 local ITEMS = {
@@ -196,6 +199,12 @@ C_Item = { GetItemInfo = function(id)
   return "Item" .. id, "[Item" .. id .. "]", item[3] or 1, 1, 0, "", "", 20, item[6] or "INVTYPE_NON_EQUIP_IGNORE", 0, item[1], item[4] or 7,
     item[5] or 0, item[2]
 end }
+-- The spell behind an item's "Use:", for the items that have one: its name and number.
+local USES = { [173] = 439, [120] = 439 }   -- the potions
+function C_Item.GetItemSpell(id)
+  if USES[id] == "broken" then error("no such item") end
+  if USES[id] then return "Use" .. id, USES[id] end
+end
 local BAGS = { [0] = { { 100, 10 }, { 101, 4 }, { 102, 1 }, { 103, 6 }, { 104, 5 }, { 105, 3 }, { 106, 2 }, { 107, 1 },
   { 108, 20 }, { 109, 2 }, { 100, 5 }, { 111, 10 }, { 112, 4 }, { 113, 1 }, { 114, 1 }, { 115, 200 }, { 116, 2 },
   { 117, 1 }, { 118, 10 }, { 119, 24 }, { 120, 24 }, { 2901, 1 }, { 121, 1 }, { 122, 1 }, { 123, 1 }, { 124, 1 },
@@ -349,6 +358,10 @@ TSM_API = { GetCustomPriceValue = function(source, itemString)
   if value then return value end
   return nil, "no value"
 end }
+-- Its desktop app's data reaches it through this one global, as the game loads.
+local tsmGot = {}
+function TSM_APPHELPER_LOAD_DATA(tag, realm, data) tsmGot[#tsmGot + 1] = { tag, realm, data } end
+local tsmLoader = TSM_APPHELPER_LOAD_DATA
 
 ---------------------------------------------------------------------------
 -- Auctionator's lookups: prices from your own scans, with their age in days
@@ -548,6 +561,13 @@ Check("...unless its quest is done: safe to delete", V({ count = 3, questDone = 
 Check("soulbound quest item: keep for it", V({ count = 1, quest = true, bound = true, vendorSell = 5 }) == "quest/bound")
 Check("soulbound, no quest: it can't be auctioned, so vendor", V({ count = 1, bound = true, vendorSell = 5, ahPrice = 9, ahListed = 9 }) == "vendor/boundsell")
 Check("...but a soulbound thing you use up is kept", V({ count = 1, bound = true, consumable = true, vendorSell = 5 }) == "keep/useup")
+-- The case reported from the game: the Cozy Sleeping Bag, soulbound, with a Use, and a vendor would buy it.
+Check("...and so is a soulbound thing with a Use of its own", V({ count = 1, bound = true, usable = true, vendorSell = 2500 }) == "keep/use")
+Check("...whatever it would fetch", V({ count = 1, bound = true, usable = true, vendorSell = 2500, ahPrice = 9, ahListed = 9 }) == "keep/use")
+Check("...unless it is the leftover of a finished quest", V({ count = 1, bound = true, usable = true, questDone = true, vendorSell = 5 }) == "vendor/leftover")
+Check("...one a vendor won't buy was kept already", V({ count = 1, bound = true, usable = true, vendorSell = 0 }) == "keep/nosale")
+Check("...and one you can trade is priced like anything else", V({ count = 1, usable = true, vendorSell = 5, ahPrice = 9, ahListed = 9 }) == "vendor/cheap"
+  and V({ count = 1, usable = true, vendorSell = 5, ahPrice = 9000, ahListed = 9 }) == "auction/costly")
 -- The case reported from the game: Icicle Rod, soulbound, 34s 76c from a vendor, 4s 29c as dust.
 local rod = { count = 1, quality = 2, bound = true, vendorSell = 3476, destroy = 429 }
 Check("Icicle Rod: soulbound, so vendor", V(rod) == "vendor/boundsell" and select(2, V(rod)).gain == 3476)
@@ -708,6 +728,13 @@ local function Tip(id)
   tooltipHook(GameTooltip, { id = id })
   return table.concat(GameTooltip.lines, "\n        ")
 end
+-- The same with Shift held: the reason in full.
+local function Full(id)
+  SHIFT = true
+  local tip = Tip(id)
+  SHIFT = false
+  return tip
+end
 Check("only gear is disenchanted, whatever TradeSkillMaster says of a trade good", ns.Check(111).dust == nil)
 Check("a disenchant value says whose estimate it is", ns.Check(131).dust == 2500 and ns.Check(131).dustBy == "TradeSkillMaster"
   and ns.Check(145).dustBy == "Auctionator" and ns.Explain(ns.Check(131), ns.Money):find("(TradeSkillMaster's estimate)", 1, true) ~= nil,
@@ -727,10 +754,27 @@ Check("Auctionator fills in the rest", ns.Check(140).price == 14 and ns.Check(14
   and ns.Check(145).dust == 3000)
 for _, id in ipairs({ 111, 119, 120, 112, 100, 101, 122, 125, 127, 105, 130, 131, 133, 114, 140, 141, 144, 160, 161, 162, 171, 172,
   173, 180, 181 }) do
-  results[#results + 1] = ("INFO  tooltip, %s:\n        %s"):format(LABEL[id], Tip(id))
+  results[#results + 1] = ("INFO  tooltip, %s:\n        %s\n      with Shift held:\n        %s"):format(LABEL[id], Tip(id), Full(id))
 end
-Check("tooltip has the verdict and the reason", Tip(111):find("vendor it", 1, true) ~= nil and #GameTooltip.lines == 2)
-Check("no tooltip lines when there is nothing to say", Tip(108) == "" and Tip(115) == "" and Tip(2901) == "")
+Check("the tooltip is one line: the marker, the verdict, and the prices behind it", Tip(111)
+  == "|TInterface\\MoneyFrame\\UI-GoldIcon:0|t |cff40ff40Vendor it|r  >>  vendor 1s 60c, auction 1s 90c (x10)" and #GameTooltip.lines == 1, Tip(111))
+Check("...the dearer way first when it is one to auction, and no count for a single item", Tip(112):find("Auction it|r  >>  auction 1g, vendor 4s (x4)", 1, true) ~= nil
+  and Tip(130):find("Auction it|r  >>  auction 38s, vendor 9s 62c", 1, true) ~= nil and Tip(130):find("(x", 1, true) == nil, Tip(130))
+Check("...materials against the better of the other two for gear to disenchant", Tip(131):find("Disenchant it|r  >>  materials ~25s, auction 9s", 1, true) ~= nil,
+  Tip(131))
+Check("...a quest's own note in a few words, or nothing when the verdict says it all", Tip(181):find("  >>  hand its quest in", 1, true) ~= nil
+  and Tip(160):find("  >>  ", 1, true) == nil and #GameTooltip.lines == 1, Tip(160))
+Check("...and with Shift held, the verdict and the reason in full", Full(111):find("Smooth Brain: |cff40ff40vendor it|r", 1, true) ~= nil
+  and Full(111):find("Buying them back costs", 1, true) ~= nil and #GameTooltip.lines == 2, Full(111))
+Check("no tooltip lines when there is nothing to say", Tip(108) == "" and Tip(115) == "" and Tip(2901) == ""
+  and Full(108) == "" and Full(2901) == "")
+do
+  local columns = GameTooltip.AddDoubleLine
+  GameTooltip.AddDoubleLine = nil   -- a tooltip that can't write two columns
+  Check("a tooltip without two columns gets the same on one line", Tip(111):find("Vendor it|r  |cffcccccc", 1, true) ~= nil
+    and Tip(111):find("auction", 1, true) ~= nil and #GameTooltip.lines == 1, Tip(111))
+  GameTooltip.AddDoubleLine = columns
+end
 tooltipHook({ AddLine = function() error("another tooltip was written to") end }, { id = 100 })
 Check("other tooltips are left alone", true)
 
@@ -971,6 +1015,191 @@ ATR.price[140] = 14
 atrChanged()
 RunTimers()
 
+-- Forever Companion notes the prices the auction house shows you, to the
+-- second. Whoever saw an item last is believed. Here TradeSkillMaster's
+-- snapshot has no time of its own, so it counts as an hour older than the
+-- login; Auctionator's days have no start, so "today" counts as a day ago.
+do
+  local NOTED, now = {}, os.time()
+  ForeverCompanion = { GetAuctionEntry = function(self, id)
+    assert(self == ForeverCompanion and type(id) == "number", "Forever Companion wants itself and an item number")
+    return NOTED[id]
+  end }
+  local function Seen(event)
+    Fire(event or "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    RunTimers()
+  end
+  NOTED[111] = { m = 30, q = 500, t = now - 60 }           -- a minute ago; TradeSkillMaster says 19, 112 listed
+  NOTED[112] = { m = 9999, q = 5, t = now - 2 * 3600 }     -- two hours ago; TradeSkillMaster says 25s
+  NOTED[143] = { m = 50, q = 3, t = now - 3 * 86400 }      -- three days ago; nobody else has a price with an age
+  NOTED[140] = { m = 400, q = 9, t = now - 2 * 86400 }     -- two days ago; Auctionator saw it today at 14c
+  Check("a price Forever Companion noted isn't used until the auction house has shown something", ns.Check(111).price == 19)
+  Fire("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+  Check("...nor until that has settled", ns.Check(111).price == 19)
+  RunTimers()
+  Check("Forever Companion's price from the last hour replaces TradeSkillMaster's, with its own count", ns.Check(111).price == 30
+    and ns.Check(111).listed == 500 and ns.Check(111).seen == nil and ns.Check(111).seenBy == nil
+    and ns.Explain(ns.Check(111), ns.Money):find("(500 listed)", 1, true) ~= nil, ns.Explain(ns.Check(111), ns.Money))
+  Check("...one from before TradeSkillMaster's snapshot doesn't", ns.Check(112).price == 2500 and ns.Check(112).listed == 80, ns.Check(112).price)
+  Check("...but fills in what TradeSkillMaster lacks, and says who saw it when", ns.Check(143).price == 50
+    and ns.Check(143).seen == 3 and ns.Check(143).seenBy == "Forever Companion"
+    and ns.Explain(ns.Check(143), ns.Money):find("(Forever Companion saw it 3 days ago)", 1, true) ~= nil,
+    ns.Check(143) and ns.Explain(ns.Check(143), ns.Money))
+  Check("...unless Auctionator saw the item more recently", ns.Check(140).price == 14 and ns.Check(140).seen == 0
+    and ns.Check(140).seenBy == "Auctionator", ns.Check(140).price)
+  NOTED[140] = { m = 400, q = 9, t = now - 60 }
+  Seen("COMMODITY_SEARCH_RESULTS_UPDATED")
+  Check("seen within the hour, it is taken over Auctionator's too", ns.Check(140).price == 400 and ns.Check(140).listed == 9
+    and ns.Check(140).seen == nil, ns.Check(140).price)
+  NOTED[140] = nil
+  NOTED[111] = { m = 30, t = now - 60 }
+  NOTED[143] = { m = 50, t = now - 60 }
+  Seen("AUCTION_HOUSE_CLOSED")
+  Check("where it took no count, TradeSkillMaster's stands in", ns.Check(111).price == 30 and ns.Check(111).listed == 112,
+    ns.Check(111).listed)
+  Check("...and with no count anywhere, it says it was seen today", ns.Check(143).seen == 0 and ns.Check(143).listed == nil
+    and ns.Explain(ns.Check(143), ns.Money):find("(Forever Companion saw it today)", 1, true) ~= nil,
+    ns.Explain(ns.Check(143), ns.Money))
+  NOTED[143] = { m = 50, q = 3, t = now - 30 * 86400 }
+  Seen()
+  Check("a price it last saw over three weeks ago is no price", Verdict(143) == "nil", Verdict(143))
+  NOTED[143] = { m = 0, t = now }
+  NOTED[2589] = { m = 27, q = 40, t = now - 2 * 86400 }
+  Seen()
+  Check("an entry with no price is passed over", Verdict(143) == "nil", Verdict(143))
+  local found = ns.Detect()
+  Check("the setup window's check counts its prices", found.companion.installed and found.companion.priced == 1
+    and found.companion.newest == 2, found.companion.priced)
+  -- Forever Companion alone
+  local tsmWas, auctionatorWas = TSM_API, Auctionator
+  TSM_API, Auctionator = nil, nil
+  Seen()
+  found = ns.Detect()
+  local state = ns.Setup.Verdict(found)
+  Check("with no other price addon its prices do", ns.Check(111).price == 30 and ns.Check(111).seen == 0
+    and ns.Check(111).seenBy == "Forever Companion" and Verdict(100) ~= "quest/noprices" and state == true, Verdict(100))
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("companion off")
+  Check("/smooth companion off: its prices are left alone", SmoothBrainDB.companion == false and Verdict(111) == "nil"
+    and Verdict(100) == "quest/noprices" and ns.Setup.Verdict(ns.Detect()) == false
+    and printed[1]:find("Forever Companion's price when it is the newest: off", 1, true) ~= nil, printed[1])
+  TSM_API, Auctionator = tsmWas, auctionatorWas
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("...and TradeSkillMaster's price is back", ns.Check(111).price == 19 and ns.Check(111).listed == 112)
+  Fire("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+  Check("...and the auction house no longer has everything judged afresh", #timers == 0, #timers)
+  SlashCmdList.SMOOTHBRAIN("companion on")
+  Check("/smooth companion on: back at once", SmoothBrainDB.companion == true and ns.Check(111).price == 30)
+  NOTED[111] = { m = "30", t = now }
+  ForeverCompanion.GetAuctionEntry = function(self, id)
+    if id == 112 then error("Forever Companion broke") end
+    return NOTED[id]
+  end
+  Seen()
+  Check("an entry that isn't what was expected, or an error in Forever Companion, changes nothing", ns.Check(111).price == 19
+    and ns.Check(112).price == 2500)
+  ForeverCompanion = nil
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("without Forever Companion everything is as before", ns.Check(111).price == 19 and ns.Check(140).price == 14
+    and ns.Detect().companion.installed == false)
+end
+
+-- Whoever saw an item for sale last is believed, with each addon's own time:
+-- TradeSkillMaster's from its app's data, Forever Companion's to the second,
+-- Auctionator's to the day. Spider Ichor: TradeSkillMaster says 19c (112
+-- listed), Auctionator saw it today at 25c.
+do
+  local now, DAY = os.time(), 86400
+  local NOTED = {}
+  ForeverCompanion = { GetAuctionEntry = function(self, id) return NOTED[id] end }
+  local function Again()   -- the auction house closes: everything is judged afresh
+    Fire("AUCTION_HOUSE_CLOSED")
+    RunTimers()
+  end
+  local function Ichor()
+    local result = ns.Check(111)
+    return result.price .. "/" .. tostring(result.listed) .. "/" .. tostring(result.seen) .. "/" .. tostring(result.seenBy)
+  end
+  local function AppData(realm, at, fields, tag)
+    TSM_APPHELPER_LOAD_DATA(tag or "AUCTIONDB_NON_COMMODITY_DATA", realm, "return {downloadTime=" .. at .. ",fields={"
+      .. (fields or '"itemString","minBuyout","numAuctions","marketValueRecent"') .. "},data={{111,J,34,J}}}")
+  end
+  Check("TradeSkillMaster's loader is listened in on, not replaced", TSM_APPHELPER_LOAD_DATA ~= tsmLoader and #tsmGot == 0)
+  AppData("Somewhere-Alliance", now - 1800)   -- its snapshot is half an hour old
+  Check("...what its app brings reaches it as it was sent", #tsmGot == 1 and tsmGot[1][1] == "AUCTIONDB_NON_COMMODITY_DATA"
+    and tsmGot[1][2] == "Somewhere-Alliance" and tsmGot[1][3]:find("downloadTime=" .. (now - 1800), 1, true) ~= nil, #tsmGot)
+  NOTED[111] = { m = 30, q = 500, t = now - 1200 }
+  Again()
+  Check("Forever Companion saw it twenty minutes ago, after the snapshot: its price", Ichor() == "30/500/nil/nil", Ichor())
+  NOTED[111] = { m = 30, q = 500, t = now - 2400 }
+  Again()
+  Check("...forty minutes ago, before it: TradeSkillMaster's, though that was within the hour", Ichor() == "19/112/nil/nil", Ichor())
+  AppData("Somewhere-Alliance", now - 5 * 3600)   -- a long evening with no /reload: the snapshot is five hours old
+  NOTED[111] = { m = 30, q = 500, t = now - 2 * 3600 }
+  Again()
+  Check("an old snapshot loses to what Forever Companion saw two hours ago, which says when that was",
+    Ichor() == "30/nil/0/Forever Companion", Ichor())
+  NOTED[111] = nil
+  Again()
+  Check("Auctionator's \"today\" with no telling when its day began: TradeSkillMaster's", Ichor() == "19/112/nil/nil", Ichor())
+  -- Auctionator's days start at its own midnight: here, six hours ago.
+  Auctionator.Constants = { SCAN_DAY_0 = now - 6 * 3600 - 1000 * DAY }
+  Again()
+  Check("its day began before the snapshot was taken, so the snapshot may well be newer: TradeSkillMaster's",
+    Ichor() == "19/112/nil/nil", Ichor())
+  AppData("Somewhere-Alliance", now - 8 * 3600)
+  Again()
+  Check("a snapshot from before its day began is older for certain: Auctionator's", Ichor() == "25/nil/0/Auctionator", Ichor())
+  AppData("Somewhere-Alliance", now - 5 * 3600)
+  Auctionator.SavedState = { TimeOfLastGetAllScan = now - 3600 }
+  Again()
+  Check("Auctionator scanned everything an hour ago, the same day it saw the item: Auctionator's", Ichor() == "25/nil/0/Auctionator", Ichor())
+  ATR.age[111] = 1
+  Again()
+  Check("...but an item it last saw yesterday wasn't in that scan: TradeSkillMaster's", Ichor() == "19/112/nil/nil", Ichor())
+  NOTED[111] = { m = 30, q = 500, t = now - 20 * 3600 }
+  AppData("Somewhere-Alliance", now - 3 * DAY)
+  Again()
+  Check("Forever Companion saw it yesterday too, at a known hour: its price over Auctionator's", Ichor() == "30/nil/0/Forever Companion", Ichor())
+  NOTED[111] = nil
+  Again()
+  Check("...and without it, Auctionator's from yesterday over a snapshot three days old", Ichor() == "25/nil/1/Auctionator", Ichor())
+  ATR.age[111] = 0
+  Auctionator.SavedState.TimeOfLastGetAllScan = now + 3600
+  AppData("Somewhere-Alliance", now - 5 * 3600)
+  Again()
+  Check("a scan time in the future is not believed", Ichor() == "19/112/nil/nil", Ichor())
+  Auctionator.SavedState.TimeOfLastGetAllScan = now - 3600
+  -- The app may bring several realms' prices
+  AppData("Elsewhere-Horde", now - 60)
+  Again()
+  Check("another realm's snapshot, when the game doesn't say which is yours: the newest is taken", Ichor() == "19/112/nil/nil", Ichor())
+  function GetRealmName() return "Somewhere" end
+  function UnitFactionGroup(unit) return unit == "player" and "Alliance" or nil end
+  Again()
+  Check("...when it does, your own realm's", Ichor() == "25/nil/0/Auctionator", Ichor())
+  AppData("Forever-US", now, '"itemString","regionMarketValue"', "AUCTIONDB_REGION_STAT")
+  AppData("Somewhere-Alliance", now, '"itemString","historical"', "AUCTIONDB_NON_COMMODITY_HISTORICAL")
+  Again()
+  Check("data without the lowest buyouts in it says nothing about their age", Ichor() == "25/nil/0/Auctionator", Ichor())
+  local got = #tsmGot
+  local ok = pcall(TSM_APPHELPER_LOAD_DATA, "APP_INFO", nil, nil)
+  Check("something unexpected from the app breaks nothing, and still reaches TradeSkillMaster", ok and #tsmGot == got + 1)
+  SlashCmdList.SMOOTHBRAIN("prices tsm")
+  Check("/smooth prices tsm: TradeSkillMaster's, however old", Ichor() == "19/112/nil/nil", Ichor())
+  SlashCmdList.SMOOTHBRAIN("prices both")
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("prices")
+  Check("/smooth prices says how the two are chosen between", printed[1] ~= nil and printed[1]:find("whichever saw it for sale last", 1, true) ~= nil,
+    printed[1])
+  -- Back to how it was: TradeSkillMaster's snapshot the newest of all
+  GetRealmName, UnitFactionGroup = nil, nil
+  Auctionator.Constants, Auctionator.SavedState = nil, nil
+  ForeverCompanion = nil
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("...and all is as before", Ichor() == "19/112/nil/nil" and ns.Check(140).price == 14, Ichor())
+end
+
 -- Bags full: the stacks you'd lose least by deleting flash
 local function Glows(button) return button.SmoothBrainFlash ~= nil and button.SmoothBrainFlash.shown == true end
 local leftoverSlot, junkSlot, ichorSlot, hideSlot = Button(0, 122, 24), Button(0, 113, 14), Button(0, 111, 12), Button(0, 101, 2)
@@ -1077,8 +1306,24 @@ Check("...and Baganator is asked to redraw", redraws == before + 1, redraws - be
 SlashCmdList.SMOOTHBRAIN("icons on")
 Check("/smooth icons on", Mark(meatSlot) == COIN and Mark(modern[1]) == COIN and Shows(111, COIN))
 SlashCmdList.SMOOTHBRAIN("tooltip off")
-Check("/smooth tooltip off", Tip(100) == "")
+Check("/smooth tooltip off", Tip(100) == "" and Full(100) == "")
 SlashCmdList.SMOOTHBRAIN("tooltip on")
+Check("/smooth tooltip on: one line again", Tip(100) ~= "" and #GameTooltip.lines == 1, Tip(100))
+printed = {}
+SlashCmdList.SMOOTHBRAIN("tooltip full")
+Check("/smooth tooltip full: the reason in full without Shift, and it says so", Tip(100):find("Smooth Brain: ", 1, true) ~= nil
+  and #GameTooltip.lines == 2 and SmoothBrainDB.explain == true and printed[1]:find("in full", 1, true) ~= nil, printed[1])
+SlashCmdList.SMOOTHBRAIN("tooltip off")
+SlashCmdList.SMOOTHBRAIN("tooltip short")
+Check("/smooth tooltip short: one line, also after it was off", Tip(100) ~= "" and #GameTooltip.lines == 1 and SmoothBrainDB.explain == false
+  and SmoothBrainDB.tooltip == true, Tip(100))
+printed = {}
+SlashCmdList.SMOOTHBRAIN("tooltip loud")
+Check("anything else is refused, and changes nothing", printed[1]:find("short, full or off", 1, true) ~= nil and SmoothBrainDB.tooltip == true
+  and SmoothBrainDB.explain == false, printed[1])
+printed = {}
+SlashCmdList.SMOOTHBRAIN("tooltip")
+Check("/smooth tooltip alone says which it is", printed[1]:find("one line", 1, true) ~= nil and printed[1]:find("hold Shift", 1, true) ~= nil, printed[1])
 
 printed = {}
 SlashCmdList.SMOOTHBRAIN("ignore |cffffffff|Hitem:111::::::::28:::::|h[Spider Ichor]|h|r")
@@ -1105,8 +1350,10 @@ do
     and Mark(ContainerFrame2Item1) == LOCK and EUIMark(euiIchorOverlay) == LOCK, tostring(Mark(bbIchorButton)))
   local tip = Tip(111)
   results[#results + 1] = "INFO  tooltip, a locked item:\n        " .. tip
-  Check("the tooltip says it is locked, and how to unlock it", tip:find("you locked it", 1, true) ~= nil
-    and tip:find("to unlock", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
+  Check("the tooltip says it is locked", tip:find("lock:0|t |cffffffffKeep it|r (you locked it)", 1, true) ~= nil
+    and #GameTooltip.lines == 1, tip)
+  Check("...and with Shift held, how to unlock it", Full(111):find("you locked it", 1, true) ~= nil
+    and Full(111):find("to unlock", 1, true) ~= nil and #GameTooltip.lines == 2, Full(111))
   printed = {}
   SlashCmdList.SMOOTHBRAIN("")
   Check("/smooth no longer lists it to vendor", table.concat(printed, "\n"):find("Item111", 1, true) == nil)
@@ -1221,9 +1468,12 @@ do
   Check("...with the tick, in every kind of bag", Mark(dustGloves) == TICK and Shows(130, TICK) and Shows(131, TICK), tostring(Mark(dustGloves)))
   local tip = Tip(130)
   results[#results + 1] = "INFO  tooltip, gloves in an equipment set:\n        " .. tip
-  Check("the tooltip names the set, and says how to turn the rule off", tip:find("keep it", 1, true) ~= nil
+  Check("the tooltip names the set", tip:find('Keep it|r  >>  in your set "Tank"', 1, true) ~= nil and #GameTooltip.lines == 1, tip)
+  tip = Full(130)
+  Check("...and with Shift held, says how to turn the rule off", tip:find("keep it", 1, true) ~= nil
     and tip:find('your equipment set "Tank"', 1, true) ~= nil and tip:find("/smooth sets off", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
-  Check("a set the game gives no name for is still a set", Tip(131):find("one of your equipment sets", 1, true) ~= nil, Tip(131))
+  Check("a set the game gives no name for is still a set", Tip(131):find("in an equipment set", 1, true) ~= nil
+    and Full(131):find("one of your equipment sets", 1, true) ~= nil, Tip(131))
   Check("other gear is still priced", Verdict(133) ~= "keep/set" and Verdict(145) ~= "keep/set", Verdict(133))
   Check("where each piece is isn't asked: on WoW Forever that can crash the game", locationsAsked == 0, locationsAsked)
   printed = {}
@@ -1298,7 +1548,9 @@ do
     and Verdict(6947) == "keep/costly", Verdict(17020))
   local tip = Tip(17030)
   results[#results + 1] = "INFO  tooltip, a shaman's Ankhs:\n        " .. tip
-  Check("the tooltip says why, and how to turn the rule off", tip:find("keep it", 1, true) ~= nil
+  Check("the tooltip says why", tip:find("Keep it|r  >>  your class uses it", 1, true) ~= nil and #GameTooltip.lines == 1, tip)
+  tip = Full(17030)
+  Check("...and with Shift held, how to turn the rule off", tip:find("keep it", 1, true) ~= nil
     and tip:find("Your class uses it", 1, true) ~= nil and tip:find("/smooth reagents off", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
   Fire("UI_ERROR_MESSAGE", 20, ERR_INV_FULL)
   Check("bags full: your reagents never flash as stacks to throw away", not Glows(ankh))
@@ -1333,6 +1585,53 @@ do
   Fire("BAG_UPDATE", 0)
   Fire("BAG_UPDATE_DELAYED")
   Fire("SKILL_LINES_CHANGED")
+end
+
+-- Soulbound things with a Use of their own are kept. The case reported from
+-- the game: the Cozy Sleeping Bag, marked to vendor.
+do
+  ITEMS[174], BOUND[174] = { 2500, 1, 1, 15 }, true                        -- the Cozy Sleeping Bag: a vendor would pay 25s
+  ITEMS[175], BOUND[175] = { 300, 1, 2, 4, 0, "INVTYPE_TRINKET" }, true    -- a soulbound trinket with a Use: gear
+  ITEMS[176] = { 40, 0, 1, 15 }                                            -- something with a Use that you can trade
+  ITEMS[177], BOUND[177] = { 30, 1, 1, 12 }, true                          -- a soulbound quest tool with a Use; its quest is done
+  ITEMS[178], BOUND[178] = { 60, 1, 1, 15 }, true                          -- soulbound, no Use: only a vendor wants it
+  USES[174], USES[175], USES[176], USES[177] = 8690, 8691, 8692, 8693
+  ITEM_QUESTS[177] = { 930 }
+  local first = #BAGS[0] + 1
+  for offset, id in ipairs({ 174, 175, 176, 177, 178 }) do BAGS[0][first + offset - 1] = { id, 1 } end
+  local bag = Button(0, 174, first)
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  bag:Update()
+  Check("the Cozy Sleeping Bag is kept, not marked to vendor", Verdict(174) == "keep/use" and Mark(bag) == TICK and Shows(174, TICK),
+    Verdict(174))
+  local tip = Tip(174)
+  results[#results + 1] = "INFO  tooltip, the Cozy Sleeping Bag:\n        " .. tip
+  Check("the tooltip says why in a few words", tip:find("Keep it|r  >>  soulbound, yours to use", 1, true) ~= nil and #GameTooltip.lines == 1, tip)
+  tip = Full(174)
+  results[#results + 1] = "INFO  ...with Shift held:\n        " .. tip
+  Check("...and with Shift held in full, with what a vendor would pay", tip:find("has a use of its own", 1, true) ~= nil
+    and tip:find("25s", 1, true) ~= nil and #GameTooltip.lines == 2, tip)
+  Check("a soulbound trinket with a Use is gear like any other: vendor", Verdict(175) == "vendor/boundsell", Verdict(175))
+  Check("something with a Use that you can trade is priced like anything else", Verdict(176) == "nil", Verdict(176))
+  Check("a soulbound quest tool whose quest is done is still a leftover", Verdict(177) == "vendor/leftover", Verdict(177))
+  Check("something soulbound with no Use still goes to a vendor", Verdict(178) == "vendor/boundsell", Verdict(178))
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("")
+  local listed = table.concat(printed, "\n")
+  Check("/smooth doesn't list the Sleeping Bag among things to vendor", listed:find("Item174", 1, true) == nil
+    and listed:find("Item178", 1, true) ~= nil, listed)
+  Fire("UI_ERROR_MESSAGE", 20, ERR_INV_FULL)
+  Check("bags full: it never flashes as a stack to throw away", not Glows(bag))
+  RunTimers()
+  USES[174] = "broken"
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("if the game can't say whether it has a Use, nothing breaks", pcall(Verdict, 174) and Verdict(174) == "vendor/boundsell", Verdict(174))
+  for id = 174, 178 do ITEMS[id], BOUND[id], USES[id] = nil, nil, nil end
+  ITEM_QUESTS[177] = nil
+  for offset = 4, 0, -1 do BAGS[0][first + offset] = nil end
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
 end
 
 -- The quest log itself: an item one of your quests asks for is kept, whatever else is known about it

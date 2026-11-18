@@ -6,7 +6,9 @@ auction, disenchant, keep, keep for a quest, or delete. WoW Forever only.
 (Called Vendor or Keep before version 2.0. `/vok` still works.)
 
 Needs prices from **TradeSkillMaster** (with the TSM desktop app), from
-**Auctionator** (your own scans), or both. With **RestedXP Guides** it knows which items a later quest needs,
+**Auctionator** (your own scans), from **Forever Companion** (what the auction
+house showed you), or all of them: the newest price is used. With
+**RestedXP Guides** it knows which items a later quest needs,
 and with **Questie** which quest items are leftovers. Works on Bagnon,
 Baganator, BetterBags, EllesmereUI's bags and the game's own bags.
 
@@ -27,7 +29,7 @@ A setup window opens by itself the first time, and with `/smooth setup`:
    prices here. You choose which to use.
 2. **Your limit.** Type it or press one of the buttons; the line below says
    what that does to the items in your bags right now.
-3. **Where it shows.** Markers, tooltip lines, flashing when your bags are
+3. **Where it shows.** Markers, the tooltip line, flashing when your bags are
    full, with the bag addons it found and what each marker means.
 4. **Quests.** Whether RestedXP and Questie are there.
 
@@ -35,7 +37,14 @@ Everything in it can also be set with the commands below.
 
 ## What you see
 
-A marker in the bottom left of the bag slot, and two lines on the tooltip.
+A marker in the bottom left of the bag slot, and one line on the tooltip: the
+same marker, the verdict, and the prices that decided it.
+
+    [gavel] Auction it          auction 5s 60c, vendor 4s 61c
+
+Hold Shift over an item for the reason in full, which is what "the tooltip
+says" means in the rest of this page. `/smooth tooltip full` shows it always.
+
 In Baganator the marker is one of its corner widgets, named "Smooth Brain":
 its settings (Customise, then the icon corners) move it to another corner or
 take it off. In BetterBags the marker sits top right, because BetterBags
@@ -49,7 +58,7 @@ a list without the icon column shows no markers.
 | gold coin | vendor it | costs little more to buy again than a vendor pays |
 | gavel | auction it | worth clearly more than a vendor pays |
 | Disenchant icon | disenchant it | green or better gear worth more as enchanting materials |
-| green tick | keep it | the same, for things you use up (potions, food, bandages); things a vendor won't buy; gear in one of your equipment sets; your class's reagents |
+| green tick | keep it | the same, for things you use up (potions, food, bandages); soulbound things with a Use of their own (a sleeping bag, a mount); things a vendor won't buy; gear in one of your equipment sets; your class's reagents |
 | yellow ! | keep it for its quest | a quest item whose quest isn't done, or an item a RestedXP guide needs that isn't cheap to get back |
 | red cross | safe to delete | a quest item whose quests are all done, that vendors don't buy |
 | padlock | keep it (you locked it) | an item you locked yourself; see below |
@@ -157,16 +166,31 @@ for you.
 
 ## Whose prices
 
-`/smooth prices both` (the default) asks TradeSkillMaster first and uses
-Auctionator for whatever it has nothing on. `/smooth prices tsm` and
+`/smooth prices both` (the default) takes, for each item, the auction price
+of whichever addon saw the item for sale last. `/smooth prices tsm` and
 `/smooth prices auctionator` use one only.
 
-Auctionator's prices come from your own scans, so they are as fresh as your
-last scan, and they come without a count of how many are listed. The tooltip
-then says when Auctionator last saw the item. A price not seen for over three
-weeks is ignored. For an item a quest needs, the "twice what the quest takes"
-test is replaced by "seen today or yesterday". Region sale figures are
-TradeSkillMaster's only.
+### The newest price wins
+
+Each addon dates its prices in its own way:
+
+- **TradeSkillMaster**'s are a snapshot from its desktop app, read when you
+  log in or `/reload`: an hour old at best, and as old as your session is
+  long. The snapshot's own time is used.
+- **Forever Companion** notes prices whenever the auction house shows them to
+  you, to the second. Its price counts whichever addon you chose above;
+  `/smooth companion off` leaves its prices alone.
+- **Auctionator**'s come from your own scans and searches, and it only notes
+  the day. Its price counts as seen when that day began, or at its last full
+  scan when that was the same day. So on the day itself a newer snapshot or a
+  price Forever Companion saw is preferred, since Auctionator can't say it
+  saw the item later.
+
+A price from your own scans comes without a count of how many are listed
+(unless Forever Companion saw it within the hour); the tooltip then says who
+saw the item and when. One not seen for over three weeks is ignored. For an
+item a quest needs, the "twice what the quest takes" test is replaced by
+"seen today or yesterday". Region sale figures are TradeSkillMaster's only.
 
 ## Without a price addon
 
@@ -184,8 +208,12 @@ say that prices are missing.
 A soulbound item can't be auctioned or traded, so a vendor is the only buyer:
 it is **vendor it**, unless an enchanter would get clearly more from
 disenchanting it. That includes gear you carry to wear, which the addon can't
-tell from gear you have replaced; lock the pieces you wear. Soulbound
-things you use up are **keep it**.
+tell from gear you have replaced; lock the pieces you wear.
+
+Soulbound things you use are **keep it**, whatever a vendor would pay: things
+you use up (a potion), and anything else with a Use of its own that you don't
+wear (a sleeping bag, a mount, a salt shaker). A soulbound recipe counts as
+one too. If you are done with such a thing, vendor it all the same.
 
 An item a vendor won't buy, with no quest tied to it (a book, a toy, a
 soulbound trinket), is **keep it**: it is only worth what it does for you. If
@@ -267,7 +295,8 @@ gets the padlock.
     /smooth                 the items to vendor or delete
     /smooth all             every item judged, including what to auction or disenchant
     /smooth limit 50c       the largest difference you'd vendor at (50c, 5s, 1g 20s)
-    /smooth prices both     whose prices: tsm, auctionator or both
+    /smooth prices both     whose prices: tsm, auctionator or both (whichever saw the item last)
+    /smooth companion on|off  count the prices Forever Companion saw at the auction house as well
     /smooth lock [item]     keep this item whatever it is worth; again to unlock; alone, lists them
     /smooth lockclick on|off  whether a middle-click on an item locks and unlocks it
     /smooth sets on|off     keep gear that is in one of your equipment sets
@@ -276,14 +305,19 @@ gets the padlock.
     /smooth drop            flash and list the stacks you'd lose least by deleting
     /smooth flash on|off    do that by itself when your bags are full
     /smooth icons on|off    the markers on bag slots
-    /smooth tooltip on|off  the tooltip lines
+    /smooth tooltip short|full|off  the tooltip: one line, or always with the reason in full
 
 ## Limits
 
 - It judges money and quests only. It can't know that the meat is your pet's
   food or the cloth is for First Aid; lock those (middle-click them).
 - TradeSkillMaster's prices are as fresh as your last login or `/reload`,
-  Auctionator's as your last scan.
+  Auctionator's as your last scan, Forever Companion's as your last look at
+  the auction house. The newest of them is used, but Auctionator only notes
+  the day, so a price it saw minutes ago can lose to a snapshot from earlier
+  that day.
+- It can't tell a soulbound thing you still use from one you are done with
+  (a recipe for a profession you don't have): both are kept.
 - "A vendor sells it" comes from TradeSkillMaster, or from vendors you have
   visited with Auctionator running, and does not say where.
 - It reads RestedXP's and Questie's own tables. If an update changes them,

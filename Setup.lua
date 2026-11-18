@@ -42,11 +42,13 @@ Setup.RULES = {
     "A vendor won't buy it and no quest is tied to it: a book, a toy, a soulbound trinket. It is only worth what it "
       .. "does for you. If it can be traded and costs more than your limit to buy, it gets the gavel instead." },
   { "vendor", "Vendor: soulbound",
-    "Anything soulbound that a vendor buys, since it can't be auctioned. Soulbound things you use up get the tick." },
+    "Anything soulbound that a vendor buys, since it can't be auctioned. Soulbound things you use get the tick: a "
+      .. "potion, and anything else with a Use of its own that you don't wear (a sleeping bag, a mount)." },
   { "vendor", "Vendor: cheap to replace",
     "Buying everything you carry of it again costs at most your limit more than a vendor pays for it. The price to buy "
-      .. "is the lower of a vendor's and the lowest auction (TradeSkillMaster first, then Auctionator; if none are "
-      .. "listed, the region's sale average). Gray junk always gets the coin." },
+      .. "is the lower of a vendor's and the lowest auction (TradeSkillMaster's, Auctionator's or Forever Companion's, "
+      .. "whichever saw the item for sale last; if none are listed, the region's sale average). Gray junk always gets "
+      .. "the coin." },
   { "keep", "Keep",
     "Costs more than that to replace, and is something you use up: a potion, food, a bandage." },
   { "auction", "Auction",
@@ -77,7 +79,8 @@ function Setup.Verdict(found)
   local settings = ns.Settings()
   local tsm = found.tsm.priced > 0 and settings.prices ~= "auctionator"
   local auctionator = found.auctionator.priced > 0 and settings.prices ~= "tsm"
-  if tsm or auctionator then
+  local companion = found.companion ~= nil and found.companion.priced > 0 and settings.companion
+  if tsm or auctionator or companion then
     return true, "Prices are available. Items in your bags are being judged."
   elseif found.tsm.priced > 0 or found.auctionator.priced > 0 then
     return false, "Prices exist, but not from the source chosen below. Choose \"Either\"."
@@ -170,7 +173,7 @@ function Setup:CreateMain(window)
   Text(page, "GameFontHighlight", MARGIN, y - 114, 40):SetText("Use:")
   self.choices = {}
   local x = MARGIN + 44
-  for _, choice in ipairs({ { "both", "Either (TSM first)", 150 }, { "tsm", "TradeSkillMaster only", 160 },
+  for _, choice in ipairs({ { "both", "Either (the newest)", 150 }, { "tsm", "TradeSkillMaster only", 160 },
     { "auctionator", "Auctionator only", 130 } }) do
     local check = Check(page, x, y - 108, choice[2], choice[3] - 30)
     check:SetScript("OnClick", function()
@@ -223,7 +226,7 @@ function Setup:CreateMain(window)
   y = -330
   Text(page, "GameFontNormal", MARGIN, y):SetText("3. Where it shows")
   self.toggles = {}
-  for index, toggle in ipairs({ { "icons", "Markers on bag slots" }, { "tooltip", "Two lines on item tooltips" },
+  for index, toggle in ipairs({ { "icons", "Markers on bag slots" }, { "tooltip", "The verdict on item tooltips" },
     { "flash", "Flash the cheapest stacks when a pickup fails because your bags are full" } }) do
     local check = Check(page, MARGIN, y - 18 - (index - 1) * 24, toggle[2])
     check:SetScript("OnClick", function(button)

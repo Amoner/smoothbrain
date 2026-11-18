@@ -18,20 +18,23 @@ local ADDON, ns = ...
 
 local DEFAULTS = {
   limit = 500,     -- copper: vendor when buying your stack back costs at most this much more than a vendor pays
-  tooltip = true,  -- add the verdict to item tooltips
+  tooltip = true,  -- add the verdict to item tooltips: one line
+  explain = false, -- ...with the reason in full under it, not only while Shift is held (/smooth tooltip full)
   icons = true,    -- mark bag slots
   flash = true,    -- when a pickup fails because your bags are full, flash the stacks you'd lose least by deleting
   onboarded = false, -- the setup window (Setup.lua) has been seen
-  prices = "both", -- whose prices: "tsm", "auctionator", or "both" (TradeSkillMaster first, Auctionator for the rest)
+  prices = "both", -- whose prices: "tsm", "auctionator", or "both" (for each item, whichever saw it for sale last)
   ignore = {},     -- [itemID] = true: never judge it; false: judge it although it is a tool (/smooth ignore)
   locked = {},     -- [itemID] = true: yours to keep, whatever it is worth (middle-click it, or /smooth lock)
   lockclick = true, -- a middle-click on an item in your bags locks or unlocks it
   sets = true,     -- keep gear that is in one of your equipment sets, whatever it is worth (/smooth sets)
   reagents = true, -- keep what your class casts with, whatever it is worth (/smooth reagents)
+  companion = true, -- take Forever Companion's price when it saw the item on the auction house last (/smooth companion)
 }
 local settings = DEFAULTS
 
 local GetItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+local GetItemSpell = (C_Item and C_Item.GetItemSpell) or GetItemSpell   -- the spell behind an item's "Use:", if it has one
 -- The bags you carry: the backpack, four bags, and on newer clients the reagent bag after them.
 local LAST_BAG = NUM_TOTAL_EQUIPPED_BAG_SLOTS or NUM_BAG_SLOTS or 4
 local BIND_ON_PICKUP, BIND_QUEST = 1, 4
@@ -468,6 +471,25 @@ local function Atr(method, itemID)
   return nil
 end
 
+-- Forever Companion's own note of an item: its lowest price, how many it
+-- counted for sale, and how many seconds ago that was. It notes prices
+-- whenever the auction house shows them to you, so its price is often the
+-- newest there is.
+local Now = time or (os and os.time)
+local function Companion(itemID)
+  local companion = ForeverCompanion
+  local lookup = type(companion) == "table" and companion.GetAuctionEntry
+  if type(lookup) ~= "function" then
+    return nil
+  end
+  local ok, entry = pcall(lookup, companion, itemID)
+  if not ok or type(entry) ~= "table" or type(entry.m) ~= "number" or entry.m <= 0 or type(entry.t) ~= "number" then
+    return nil
+  end
+  local listed = type(entry.q) == "number" and entry.q > 0 and entry.q or nil
+  return entry.m, listed, math.max(0, Now() - entry.t)
+end
+
 local function UseTSM()
   return settings.prices ~= "auctionator" and TSM_API ~= nil and TSM_API.GetCustomPriceValue ~= nil
 end
@@ -477,27 +499,129 @@ local function UseAuctionator()
     and type(Auctionator.API.v1) == "table"
 end
 
--- What the price addons know about an item. TradeSkillMaster is asked first:
--- its prices come with how many are listed. Auctionator's, from your own
--- scans, fill in what it lacks; they come with how many days ago the item was
--- last seen, and are dropped once that is over three weeks.
+local function UseCompanion()
+  return settings.companion and type(ForeverCompanion) == "table" and type(ForeverCompanion.GetAuctionEntry) == "function"
+end
+
+-- A price Forever Companion saw on the auction house within this many seconds
+-- is what the auction house shows now: it is given with how many are listed,
+-- not with how long ago it was seen.
+local LIVE_SECONDS = 3600
+local DAY, STALE_DAYS = 86400, 21   -- a price of your own not seen for three weeks is no price
+
+-- When TradeSkillMaster's auction prices were taken. It doesn't say, but its
+-- desktop app's data reaches it through one global function as the game
+-- loads, each set headed by the time it was downloaded. That function is
+-- listened in on (TradeSkillMaster's own is called as before, with what it was
+-- given) and the time of the set with the lowest buyouts noted, by realm, as
+-- the app may bring several: [realm, in small letters] = time.
+local loadedAt = Now()   -- when the game read this file: your login, or the last /reload
+local tsmTimes = {}
+if type(TSM_APPHELPER_LOAD_DATA) == "function" then
+  local deliver = TSM_APPHELPER_LOAD_DATA
+  TSM_APPHELPER_LOAD_DATA = function(tag, realm, data, ...)
+    pcall(function()
+      local head = type(realm) == "string" and type(data) == "string" and data:sub(1, 400)
+      local at = head and head:find('"minBuyout"', 1, true) and tonumber(head:match("downloadTime=(%d+)"))
+      if at then
+        tsmTimes[realm:lower()] = at
+      end
+    end)
+    return deliver(tag, realm, data, ...)
+  end
+end
+
+-- The time of your own realm's prices; failing that, of the newest set that
+-- came. When none was caught (TradeSkillMaster loaded its data before this
+-- file was read, or brings it some other way), they are taken to be an hour
+-- older than your login: its app fetches them about hourly, and the game only
+-- reads them when it loads.
+local function TSMSeen()
+  local realm, faction = GetRealmName and GetRealmName(), UnitFactionGroup and UnitFactionGroup("player")
+  local at = type(realm) == "string" and type(faction) == "string" and tsmTimes[(realm .. "-" .. faction):lower()]
+  if not at then
+    for _, other in pairs(tsmTimes) do
+      at = math.max(at or 0, other)
+    end
+  end
+  return at or (loadedAt - LIVE_SECONDS)
+end
+
+-- Auctionator only notes the day it last saw an item for sale (its days
+-- start at midnight). Its price counts as seen when that day began, or, when
+-- its last full scan was on that same day, at that scan.
+local function AuctionatorSeen(days)
+  local now = Now()
+  local constants, state = Auctionator.Constants, Auctionator.SavedState
+  local zero = type(constants) == "table" and constants.SCAN_DAY_0
+  if type(zero) ~= "number" then
+    return now - (days + 1) * DAY   -- no telling when its days begin: a full day back at the latest
+  end
+  local began = zero + (math.floor((now - zero) / DAY) - days) * DAY
+  local scan = 0
+  for _, key in ipairs({ "TimeOfLastGetAllScan", "TimeOfLastReplicateScan", "TimeOfLastBrowseScan" }) do
+    local at = type(state) == "table" and state[key]
+    if type(at) == "number" and at > scan then
+      scan = at
+    end
+  end
+  return scan >= began and scan < began + DAY and scan <= now and scan or began
+end
+
+-- What the price addons know about an item. For the lowest auction price,
+-- whichever of them saw the item most recently is believed: TradeSkillMaster
+-- (a snapshot from its desktop app, read when the game loads: an hour old at
+-- best), Forever Companion (which notes prices as the auction house shows
+-- them, to the second) or Auctionator (your scans and searches, to the day).
+-- TradeSkillMaster's price comes with how many are listed, and so does one
+-- Forever Companion saw within the hour; any other comes with how many days
+-- ago the item was seen. Your own notes are dropped once that is over three
+-- weeks.
 local function Market(itemID, gear)
   local market = {}
+  local now = Now()
+  local price, at, listed, by, days   -- the newest so far
+  local function Offer(itsPrice, itsTime, itsCount, itsName, itsDays)
+    if itsPrice and itsPrice > 0 and (not at or itsTime > at) then
+      price, at, listed, by, days = itsPrice, itsTime, itsCount, itsName, itsDays
+    end
+  end
+  local tsmListed
   if UseTSM() then
-    market.ahPrice = TSM("dbminbuyout", itemID)
-    market.ahListed = market.ahPrice and (TSM("dbnumauctions", itemID) or 0) or nil
+    local buyout = TSM("dbminbuyout", itemID)
+    tsmListed = buyout and (TSM("dbnumauctions", itemID) or 0) or nil
+    Offer(buyout, TSMSeen(), tsmListed)
     market.regionSale, market.saleRate = TSM("dbregionsaleavg", itemID), TSM("dbregionsalerate", itemID)
     market.vendorBuy = TSM("vendorbuy", itemID)
     market.destroy = gear and TSM("destroy", itemID) or nil
     market.destroyBy = market.destroy and "TradeSkillMaster" or nil
   end
-  if UseAuctionator() then
-    if not market.ahPrice then
-      local price, seen = Atr("GetAuctionPriceByItemID", itemID), Atr("GetAuctionAgeByItemID", itemID)
-      if price and price > 0 and seen then
-        market.ahPrice, market.ahSeen = price, seen
-      end
+  if UseCompanion() then
+    local noted, count, age = Companion(itemID)
+    if noted and age <= STALE_DAYS * DAY then
+      Offer(noted, now - age, count, "Forever Companion", math.floor(age / DAY))
     end
+  end
+  if UseAuctionator() then
+    local noted, seen = Atr("GetAuctionPriceByItemID", itemID), Atr("GetAuctionAgeByItemID", itemID)
+    if noted and seen then
+      Offer(noted, AuctionatorSeen(seen), nil, "Auctionator", seen)
+    end
+  end
+  if price then
+    market.ahPrice, market.ahBy = price, by
+    if not by then
+      market.ahListed = listed   -- TradeSkillMaster's
+    elseif by == "Forever Companion" and now - at <= LIVE_SECONDS then
+      -- Seen just now: given with how many are listed, like TradeSkillMaster's
+      -- (whose count stands in when Forever Companion took none).
+      market.ahListed = listed or tsmListed
+      market.ahSeen = not market.ahListed and 0 or nil
+    else
+      market.ahSeen = days
+    end
+  end
+  if UseAuctionator() then
     local vendor = not market.vendorBuy and Atr("GetVendorPriceByItemID", itemID)
     if vendor and vendor > 0 then
       market.vendorBuy = vendor
@@ -655,11 +779,19 @@ local function Judge(itemID, mine)
   -- ones), and items Questie ties to a quest. Is the quest still to do, or is
   -- the item a leftover? Not asked of things you wear, which may be worth
   -- keeping whatever their quest.
-  local questNote, doneNote, hold
+  local questNote, questBrief, doneNote, hold   -- questBrief: the note in a few words, for the tooltip's one line
   -- Wearable: a weapon or armour. (The slot name alone won't do: the game gives
   -- things you can't wear a slot name of their own, not an empty one.)
   local wearable = classID == WEAPON or classID == ARMOR
     or (equipSlot ~= nil and equipSlot ~= "" and equipSlot ~= "INVTYPE_NON_EQUIP_IGNORE" and equipSlot ~= "INVTYPE_NON_EQUIP")
+  -- Usable: it has a "Use:" of its own and isn't worn. A sleeping bag, a
+  -- mount's reins, a salt shaker. Soulbound, such a thing is for using, not
+  -- for selling (reported with the Cozy Sleeping Bag, marked to vendor).
+  local usable = false
+  if not wearable and GetItemSpell then
+    local ok, spell, spellID = pcall(GetItemSpell, itemID)
+    usable = ok and (spell ~= nil or spellID ~= nil)
+  end
   -- Quest items beyond a guide's "collect this": the game's own (the
   -- yellow-edged ones), and items Questie ties to a quest. This is asked even
   -- when RestedXP's quest for the item is done, because RestedXP knows one
@@ -672,8 +804,10 @@ local function Judge(itemID, mine)
   local wanted = LogWants(name)
   if wanted then
     quest, hold, questDone, by = true, true, false, nil
-    questNote = QuestReady(wanted) and "Its quest is complete: hand it in, and this item goes with it."
+    local ready = QuestReady(wanted)
+    questNote = ready and "Its quest is complete: hand it in, and this item goes with it."
       or "A quest in your log asks for it."
+    questBrief = ready and "hand its quest in" or "in your quest log"
   end
   if not quest then
     local questItem = classID == QUEST_ITEM or bindType == BIND_QUEST or mine.questItem
@@ -686,9 +820,11 @@ local function Judge(itemID, mine)
       end
       if done == false then
         quest, hold, questDone, by = true, true, false, nil
-        questNote = starts and not QuestDone(starts) and "It starts a quest you haven't done."
+        local opens = starts and not QuestDone(starts)
+        questNote = opens and "It starts a quest you haven't done."
           or detail == "handin" and "Its quest is complete: hand it in, and this item goes with it."
           or "A quest you haven't finished needs it."
+        questBrief = opens and "starts a quest" or detail == "handin" and "hand its quest in" or nil
       elseif (starts or starter) and not wearable then
         -- It starts a quest, that quest is done, and it is still in your bags:
         -- an item like that tends to be carried on to the next quest (the Titan
@@ -696,6 +832,7 @@ local function Judge(itemID, mine)
         -- quest is done says nothing about what it is for now.
         quest, hold, questDone, by = true, true, false, nil
         questNote = "It started a quest you have done, and may be wanted for the next one."
+        questBrief = "the next quest may want it"
       elseif done == true and not wearable then
         if not questDone then
           questDone, by = true, "Questie"
@@ -713,14 +850,17 @@ local function Judge(itemID, mine)
     quest, hold, questDone, by = true, true, false, nil
     questNote = "Part of your quest log can't be read just now (a folded header, or quests still loading), so it is kept "
       .. "in case a quest there wants it."
+    questBrief = "your quest log isn't read yet"
   end
   -- Disenchanting is compared for green or better weapons and armour.
   local market = Market(itemID, (quality or 0) >= UNCOMMON and (classID == WEAPON or classID == ARMOR))
   local result = ns.Decide({
     count = mine.count,
     consumable = classID == CONSUMABLE,
+    usable = usable,
     quest = quest,
     questNote = questNote,
+    questBrief = questBrief,
     doneNote = doneNote,
     needed = need and need.needed,
     hold = hold,
@@ -733,11 +873,12 @@ local function Judge(itemID, mine)
     ahPrice = market.ahPrice,
     ahListed = market.ahListed,
     ahSeen = market.ahSeen,
+    ahBy = market.ahBy,
     regionSale = market.regionSale,
     saleRate = market.saleRate,
     destroy = market.destroy,
     destroyBy = market.destroyBy,
-    noPrices = not (UseTSM() or UseAuctionator()),
+    noPrices = not (UseTSM() or UseAuctionator() or UseCompanion()),
     enchanter = IsEnchanter(),
   }, settings.limit)
   if result then
@@ -802,9 +943,25 @@ local function OnTooltip(tooltip, data)
     itemID = type(link) == "string" and tonumber(link:match("item:(%d+)"))
   end
   local result = itemID and ns.Check(itemID)
-  if result then
+  if not result then
+    return
+  end
+  -- The reason in full is a paragraph, and a tooltip has enough to read: it
+  -- shows while Shift is held, or always with /smooth tooltip full.
+  if settings.explain or (IsShiftKeyDown ~= nil and IsShiftKeyDown()) then
     tooltip:AddLine("Smooth Brain: " .. ns.HEADLINE[result.verdict], 1, 0.82, 0)
     tooltip:AddLine(ns.Explain(result, ns.Money), 0.8, 0.8, 0.8, true)
+    return
+  end
+  -- Otherwise one line: the slot's marker, the verdict, and on the right the
+  -- prices that decided it.
+  local mark = MARKS[result.verdict]
+  local verdict = (mark and ("|T" .. mark .. ":0|t ") or "") .. ns.TITLE[result.verdict]
+  local brief = ns.Brief(result, ns.Money)
+  if brief and tooltip.AddDoubleLine then
+    tooltip:AddDoubleLine(verdict, brief, 1, 0.82, 0, 0.8, 0.8, 0.8)
+  else
+    tooltip:AddLine(verdict .. (brief and ("  |cffcccccc" .. brief .. "|r") or ""), 1, 0.82, 0)
   end
 end
 
@@ -1346,7 +1503,7 @@ local ORDER = { vendor = 1, free = 2, disenchant = 3, auction = 4, keep = 5, que
 
 -- The items to vendor or delete; with everything, the rest as well.
 local function List(everything)
-  if not (UseTSM() or UseAuctionator()) then
+  if not (UseTSM() or UseAuctionator() or UseCompanion()) then
     -- Without prices there is still something to say: see "Without a price addon" in the README.
     Say("no prices are available (" .. (settings.prices == "both"
       and "neither TradeSkillMaster nor Auctionator is running"
@@ -1563,7 +1720,7 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     end
     local using = settings.prices == "tsm" and "TradeSkillMaster's prices only"
       or settings.prices == "auctionator" and "Auctionator's prices only"
-      or "TradeSkillMaster's prices, and Auctionator's for items it has none for"
+      or "TradeSkillMaster's and Auctionator's prices: for each item, whichever saw it for sale last"
     Say("using " .. using .. ((UseTSM() or UseAuctionator()) and "." or ", but that isn't running."))
   elseif command == "ignore" then
     Ignore(rest)
@@ -1575,6 +1732,8 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     Toggle("sets", "Keeping gear that is in one of your equipment sets", rest, true)
   elseif command == "reagents" then
     Toggle("reagents", "Keeping your class's reagents", rest, true)
+  elseif command == "companion" then
+    Toggle("companion", "Taking Forever Companion's price when it is the newest", rest, true)
   elseif command == "drop" then
     local stacks = FlashCheapest()
     if #stacks == 0 then
@@ -1591,14 +1750,28 @@ SlashCmdList.SMOOTHBRAIN = function(message)
   elseif command == "icons" then
     Toggle("icons", "Markers on bag slots", rest)
   elseif command == "tooltip" then
-    Toggle("tooltip", "Tooltip lines", rest)
+    local choice = rest:lower()
+    if choice == "short" or choice == "full" then
+      settings.tooltip, settings.explain = true, choice == "full"
+    elseif choice == "on" or choice == "off" then
+      settings.tooltip = choice == "on"
+    elseif choice ~= "" then
+      Say("choose /smooth tooltip short, full or off.")
+      return
+    end
+    Say("the tooltip " .. (not settings.tooltip and "says nothing. /smooth tooltip short or full brings it back."
+      or settings.explain and "gives the verdict and the reason in full. /smooth tooltip short keeps it to one line."
+      or "gives the verdict in one line; hold Shift over an item for the reason in full. /smooth tooltip full always shows it."))
   else
     Say("commands:")
     print("  /smooth - list the items in your bags to vendor or delete; /smooth all lists every item judged")
     print("  /smooth limit 5s - vendor an item when buying your stack back costs at most this much more than a vendor pays; now "
       .. ns.Money(settings.limit))
     print("  /smooth setup - the setup window: checks that prices are available, and sets everything below")
-    print("  /smooth prices tsm|auctionator|both - whose auction prices to use; now " .. settings.prices)
+    print("  /smooth prices tsm|auctionator|both - whose auction prices to use (both: whichever saw the item last); now "
+      .. settings.prices)
+    print("  /smooth companion on|off - take Forever Companion's price as well, when it saw the item on the auction house "
+      .. "last; now " .. (settings.companion and "on" or "off"))
     print("  /smooth lock [item] - keep this item whatever it is worth (shift-click it); again to unlock; alone, lists them. "
       .. "A middle-click on an item in your bags does the same")
     print("  /smooth lockclick on|off - whether a middle-click locks and unlocks; now " .. (settings.lockclick and "on" or "off"))
@@ -1612,7 +1785,8 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     print("  /smooth flash on|off - when a pickup fails because your bags are full, flash the "
       .. DROP_COUNT .. " stacks you'd lose least by deleting")
     print("  /smooth drop - flash them now, and list them")
-    print("  /smooth tooltip on|off - the tooltip lines")
+    print("  /smooth tooltip short|full|off - the tooltip: one line (hold Shift for the reason in full), or always in full; now "
+      .. (not settings.tooltip and "off" or settings.explain and "full" or "short"))
   end
 end
 
@@ -1644,6 +1818,8 @@ function ns.Detect()
     tsm = { installed = TSM_API ~= nil and TSM_API.GetCustomPriceValue ~= nil, priced = 0 },
     auctionator = { installed = type(Auctionator) == "table" and type(Auctionator.API) == "table"
       and type(Auctionator.API.v1) == "table", priced = 0 },
+    companion = { installed = type(ForeverCompanion) == "table" and type(ForeverCompanion.GetAuctionEntry) == "function",
+      priced = 0 },
     rxp = RXP() ~= nil,
     questie = Questie() ~= nil,
     bags = {},
@@ -1656,6 +1832,11 @@ function ns.Detect()
     if price and price > 0 and seen then
       found.auctionator.priced = found.auctionator.priced + 1
       found.auctionator.newest = math.min(found.auctionator.newest or seen, seen)
+    end
+    local noted, _, age = Companion(itemID)
+    if noted and age <= STALE_DAYS * DAY then
+      found.companion.priced = found.companion.priced + 1
+      found.companion.newest = math.min(found.companion.newest or math.floor(age / DAY), math.floor(age / DAY))
     end
   end
   if baganatorHooked then
@@ -1714,6 +1895,30 @@ local function HookAuctionator()
   end)
 end
 
+-- Forever Companion notes prices as the auction house shows them, and doesn't
+-- say when it has. So a moment after the auction house has shown something,
+-- and when it closes, everything is judged afresh.
+local AUCTION_EVENTS = { AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = true, AUCTION_HOUSE_BROWSE_RESULTS_ADDED = true,
+  COMMODITY_SEARCH_RESULTS_UPDATED = true, AUCTION_ITEM_LIST_UPDATE = true, REPLICATE_ITEM_LIST_UPDATE = true,
+  AUCTION_HOUSE_CLOSED = true }
+local pricesSettling
+local function PricesSeen()
+  if not UseCompanion() then
+    return
+  end
+  local function Settled()
+    pricesSettling = nil
+    Forget()
+    RefreshIcons()
+  end
+  if not (C_Timer and C_Timer.After) then
+    Settled()
+  elseif not pricesSettling then
+    pricesSettling = true
+    C_Timer.After(2, Settled)
+  end
+end
+
 -- The quest log changes far more often than it matters here (every kill that
 -- counts for a quest). It is read again a moment after it last changed, and
 -- items are only judged afresh when what the verdicts hang on is different:
@@ -1748,8 +1953,13 @@ for _, event in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "BAG_UPDATE", "BAG_UPDA
   "QUEST_LOG_UPDATE", "EQUIPMENT_SETS_CHANGED" }) do
   pcall(frame.RegisterEvent, frame, event)
 end
+for event in pairs(AUCTION_EVENTS) do
+  pcall(frame.RegisterEvent, frame, event)   -- which of them exist depends on the client
+end
 frame:SetScript("OnEvent", function(_, event, name, extra)
-  if event == "GLOBAL_MOUSE_DOWN" then
+  if AUCTION_EVENTS[event] then
+    PricesSeen()
+  elseif event == "GLOBAL_MOUSE_DOWN" then
     -- Any mouse button, anywhere. The middle one, on an item in your bags, locks or unlocks it.
     if name == "MiddleButton" and settings.lockclick then
       ToggleHovered()

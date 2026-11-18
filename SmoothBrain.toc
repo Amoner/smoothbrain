@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Smooth Brain
 ## Notes: Stop thinking about your bags. Every item gets a marker: vendor, auction, disenchant, keep, keep for a quest, or delete. Uses TradeSkillMaster's or Auctionator's prices, RestedXP's guides and Questie's quest data. /smooth setup to begin.
-## Version: 2.7
+## Version: 2.8
 ## Author: Am0n3r
 ## X-License: MIT
 ## X-Curse-Project-ID: 1799946

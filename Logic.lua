@@ -21,10 +21,13 @@ ns.FRESH_DAYS = 1
 -- facts (prices per unit, in copper):
 --   count       how many you carry
 --   consumable  something you use up (a potion, food, a bandage)
---   quest       a quest you haven't done needs it: a RestedXP guide says so,
+--   usable      something with a Use of its own that you don't wear (a sleeping
+--               bag, a mount's reins)
+--   quest      a quest you haven't done needs it: a RestedXP guide says so,
 --               or it is a quest item nothing says is finished with
 --   questNote   for the second kind, a sentence saying which
---   hold        for the second kind: keep it whatever it costs to buy back
+--   questBrief  the same in a few words, when it says more than "a quest needs it"
+--   hold      for the second kind: keep it whatever it costs to buy back
 --               (only a guide's "collect this" is weighed against the price)
 --   needed      how many that quest takes, if the guide says
 --   onQuest     that quest is in your log now
@@ -38,6 +41,7 @@ ns.FRESH_DAYS = 1
 --   ahListed    how many are listed
 --   ahSeen      instead of ahListed, for a price from your own scans: how many
 --               days ago the item was last seen listed
+--   ahBy        whose scans those were ("Auctionator", "Forever Companion")
 --   regionSale  what it sells for across the region, for when none are listed
 --   destroy     what disenchanting it yields in materials, for gear that can be
 --   enchanter   you can disenchant
@@ -59,6 +63,7 @@ function ns.Decide(facts, limit)
   local quest = facts.quest == true
   local result = { count = count, quest = quest or nil, needed = quest and facts.needed or nil,
     questDone = facts.questDone or nil, questNote = quest and facts.questNote or nil,
+    questBrief = quest and facts.questBrief or nil,
     doneNote = facts.questDone and facts.doneNote or nil }
   local function Is(verdict, why)
     result.verdict, result.why = verdict, why
@@ -102,7 +107,7 @@ function ns.Decide(facts, limit)
     local function Fetches()
       result.price, result.source, result.cost = each, where, each * count
       if where == "ah" then
-        result.seen = facts.ahSeen
+        result.seen, result.seenBy = facts.ahSeen, facts.ahSeen and facts.ahBy or nil
         result.listed = not facts.ahSeen and (facts.ahListed or 0) or nil
       end
     end
@@ -135,6 +140,11 @@ function ns.Decide(facts, limit)
     if facts.consumable then
       return Is("keep", "useup")   -- something soulbound you would use up, not sell
     end
+    if facts.usable then
+      -- Something soulbound you use, and keep using: a sleeping bag, a mount.
+      -- What a vendor pays for it is beside the point.
+      return Is("keep", "use")
+    end
     -- It can't be auctioned or traded, so a vendor is the only buyer.
     result.dust = dust and dust * count or nil
     return Is("vendor", "boundsell")
@@ -161,6 +171,7 @@ function ns.Decide(facts, limit)
       end
     elseif not price then
       result.listed, result.seen, result.short = listed, seen, need
+      result.seenBy = seen and facts.ahBy or nil
       return Is("quest", seen and "stale" or "fewlisted")
     end
   elseif not price and not quest and (facts.regionSale or 0) > 0 then
@@ -171,6 +182,7 @@ function ns.Decide(facts, limit)
     if price then
       result.price, result.source, result.cost = price, source, price * count
       result.listed, result.seen = source == "ah" and listed or nil, source == "ah" and seen or nil
+      result.seenBy = result.seen and facts.ahBy or nil
     end
     return Disenchant()
   end
@@ -187,6 +199,7 @@ function ns.Decide(facts, limit)
 
   result.price, result.source = price, source
   result.listed, result.seen = source == "ah" and listed or nil, source == "ah" and seen or nil
+  result.seenBy = result.seen and facts.ahBy or nil
   result.cost = price * count
   result.diff = result.cost - result.gain
   result.saleRate = facts.saleRate
@@ -207,6 +220,14 @@ ns.HEADLINE = {
   locked = "|cffffffffkeep it|r (you locked it)",
 }
 
+-- The same with a capital, to start the tooltip's one line.
+ns.TITLE = {}
+for verdict, text in pairs(ns.HEADLINE) do
+  ns.TITLE[verdict] = (text:gsub("^(|c%x%x%x%x%x%x%x%x)(%l)", function(colour, letter)
+    return colour .. letter:upper()
+  end))
+end
+
 local function Days(days)
   return days == 0 and "today" or days == 1 and "yesterday" or (days .. " days ago")
 end
@@ -217,7 +238,7 @@ local function Where(result)
   elseif result.source == "region" then
     return "going by sales in the region (none listed here now)"
   elseif result.seen then
-    return ("on the auction house (Auctionator saw it %s)"):format(Days(result.seen))
+    return ("on the auction house (%s saw it %s)"):format(result.seenBy or "Auctionator", Days(result.seen))
   end
   return ("on the auction house (%d listed)"):format(result.listed or 0)
 end
@@ -279,8 +300,8 @@ function ns.Explain(result, Money)
   elseif why == "nosource" then
     return note .. "Nobody is selling it: none on the auction house, and no vendor known."
   elseif why == "stale" then
-    return note .. ("Auctionator last saw it on the auction house %s, too long ago to count on buying it back."):format(
-      Days(result.seen))
+    return note .. ("%s last saw it on the auction house %s, too long ago to count on buying it back."):format(
+      result.seenBy or "Auctionator", Days(result.seen))
   elseif why == "fewlisted" then
     return note .. ("Only %d on the auction house, too few to count on buying %d back."):format(result.listed, result.short)
   elseif why == "nosale" then
@@ -295,8 +316,11 @@ function ns.Explain(result, Money)
       result.count, Money(result.cost), Where(result))
   elseif why == "useup" then
     return "It is soulbound and something you use up."
+  elseif why == "use" then
+    return ("It is soulbound and has a use of its own, so it is kept: it is for using, not for the %s a vendor would "
+      .. "pay. If you are done with it, vendor it all the same."):format(Money(result.gain))
   elseif why == "boundsell" then
-    local text = ("It is soulbound, so it can't be auctioned: a vendor pays %s for your %d."):format(
+    local text =("It is soulbound, so it can't be auctioned: a vendor pays %s for your %d."):format(
       Money(result.gain), result.count)
     if result.dust then
       text = text .. (" Disenchanting would yield about %s%s, %s."):format(Money(result.dust), Estimate(result),
@@ -335,6 +359,68 @@ function ns.Explain(result, Money)
     text = text .. (" Only about %d%% of its auctions sell."):format(math.floor(result.saleRate * 100 + 0.5))
   end
   return text .. DustNote(result, Money)
+end
+
+-- The same in a few words, for the tooltip's one line: the two prices that
+-- decided it, the better one first. nil when the verdict says it all.
+function ns.Brief(result, Money)
+  local why = result.why
+  local gain, cost = result.gain or 0, result.cost or 0
+  local stack = (result.count or 0) > 1 and (" (x%d)"):format(result.count) or ""
+  local function Vendor()
+    return "vendor " .. Money(gain)
+  end
+  local function Other()   -- what buying it again costs, and where
+    return (result.source == "vendor" and "buy back " or result.source == "region" and "region " or "auction ") .. Money(cost)
+  end
+  local quest = result.questBrief or (result.needed and ("a quest needs %d"):format(result.needed)) or nil
+  local function Quest(more)
+    return quest and (quest .. ", " .. more) or more
+  end
+  if why == "locked" then
+    return nil   -- the headline says it
+  elseif why == "set" then
+    return result.set and ("in your set \"" .. result.set .. "\"") or "in an equipment set"
+  elseif why == "reagent" then
+    return "your class uses it"
+  elseif why == "done" or why == "leftover" then
+    return "a quest leftover"
+  elseif why == "junk" then
+    return "junk"
+  elseif why == "onquest" then
+    return "you are on it now"
+  elseif why == "novalue" or why == "bound" or why == "held" or why == "noprices" then
+    return quest
+  elseif why == "nosource" then
+    return Quest("none for sale")
+  elseif why == "stale" then
+    return Quest("last listed " .. Days(result.seen))
+  elseif why == "fewlisted" then
+    return Quest(("only %d listed"):format(result.listed))
+  elseif why == "nosale" then
+    return result.tradeable and "not worth auctioning" or "can't be sold"
+  elseif why == "unsellable" then
+    return Other() .. ", vendors won't buy it" .. stack
+  elseif why == "useup" then
+    return "soulbound, you use it up"
+  elseif why == "use" then
+    return "soulbound, yours to use"
+  elseif why == "boundsell" then
+    return "soulbound, " .. Vendor() .. stack
+  elseif why == "dust" then
+    -- against the better of the other two
+    local rival = cost > gain and Other() or gain > 0 and Vendor() or nil
+    return "materials ~" .. Money(result.dust) .. (rival and (", " .. rival) or "") .. stack
+  elseif why == "nodust" then
+    return Vendor() .. ", materials ~" .. Money(result.dust) .. stack
+  elseif why == "cheap" then
+    return Vendor() .. ", " .. Other() .. stack
+  end
+  local text = Other() .. ", " .. Vendor()
+  if result.verdict == "auction" and result.saleRate and result.saleRate < 0.2 then
+    text = text .. ", rarely sells"
+  end
+  return text .. stack
 end
 
 -- 12345 -> "1g 23s 45c"
