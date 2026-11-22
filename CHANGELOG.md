@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.9
+
+Lighter on your game, one new rule, and one fix to which price is believed.
+
+- **New rule: food and potions that are crafting reagents are priced like
+  trade goods**, not kept. Raw fish is the usual case: Raw Winter Squid, 7c
+  from a vendor and silvers at auction, was marked "keep it" and is now
+  "auction it". Lock the ones you cook with.
+- **Fixed: an older Auctionator price could pass for the newest.** With
+  TradeSkillMaster running too, 2.8 counted Auctionator's price as seen at
+  its last scan when that was the same day. But Auctionator stamps a scan
+  when it starts, whether or not it gets to the item. Reported with Raw
+  Winter Squid: 25s from an afternoon scan was quoted in place of
+  TradeSkillMaster's newer 5s 95c. Auctionator's price now counts as seen
+  when its day began, so a snapshot from the same day is preferred.
+- **A skill going up no longer has every item in your bags judged again.**
+  It did, on every skill gain, in combat too. Now that only happens when you
+  learn Disenchant.
+- **At the auction house, only items with a newly noted price are judged
+  again.** Since 2.8 every item was, every two seconds while results came in.
+- **A change in one bag has only that bag read again**, not all of them.
+- TradeSkillMaster and Auctionator are asked less for each item, and nothing
+  at all for soulbound things or for items kept for a quest: no price can
+  change what those are marked as.
+
 ## 2.8
 
 Two new rules. Both change what some of your items are marked as.

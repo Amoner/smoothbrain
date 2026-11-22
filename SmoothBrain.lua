@@ -114,6 +114,16 @@ local function IsEnchanter()
     or (IsSpellKnown ~= nil and IsSpellKnown(DISENCHANT) == true)
 end
 
+-- The same, asked once and remembered: it only changes when you learn a
+-- profession, and then it is asked again (SkillsChanged, further down).
+local enchanter
+local function Enchanter()
+  if enchanter == nil then
+    enchanter = IsEnchanter()
+  end
+  return enchanter
+end
+
 local function Say(text)
   print("|cffffd200Smooth Brain|r: " .. text)
 end
@@ -215,7 +225,9 @@ end
 -- Returns Questie's database and player modules, or nil; and, as a second
 -- value, true when Questie is installed but hasn't finished starting. Until
 -- then it calls every race- or class-restricted quest "not for you", which
--- would make leftovers of items an open quest still needs.
+-- would make leftovers of items an open quest still needs. Once found, the
+-- two modules are remembered until everything is judged afresh (Forget).
+local questieFound   -- { database, player }
 local function Questie()
   if type(QuestieLoader) ~= "table" or type(QuestieLoader.ImportModule) ~= "function" then
     return nil
@@ -224,13 +236,17 @@ local function Questie()
   if type(addon) ~= "table" or not (addon.started == true or (type(addon.API) == "table" and addon.API.isReady == true)) then
     return nil, true
   end
+  if questieFound then
+    return questieFound[1], questieFound[2]
+  end
   local ok, db = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestieDB")
   if not ok or type(db) ~= "table" or type(db.QueryItemSingle) ~= "function"
     or type(db.QueryQuestSingle) ~= "function" then
     return nil
   end
   local okPlayer, player = pcall(QuestieLoader.ImportModule, QuestieLoader, "QuestiePlayer")
-  return db, okPlayer and type(player) == "table" and player or nil
+  questieFound = { db, okPlayer and type(player) == "table" and player or nil }
+  return questieFound[1], questieFound[2]
 end
 
 -- Whether a quest in your log has all its objectives met and only waits to be handed in.
@@ -445,16 +461,21 @@ end
 -- Prices: TradeSkillMaster's and Auctionator's
 ---------------------------------------------------------------------------
 -- A TradeSkillMaster price source for an item (copper, or a plain number for
--- dbnumauctions and dbregionsalerate), or nil when it has none.
-local function TSM(source, itemID)
+-- dbnumauctions and dbregionsalerate), or nil when it has none. The item is
+-- given the way TradeSkillMaster writes it: "i:" and its number.
+local function TSMValue(source, itemString)
   if not (TSM_API and TSM_API.GetCustomPriceValue) then
     return nil
   end
-  local ok, value = pcall(TSM_API.GetCustomPriceValue, source, "i:" .. itemID)
+  local ok, value = pcall(TSM_API.GetCustomPriceValue, source, itemString)
   if ok and type(value) == "number" and value > 0 then
     return value
   end
   return nil
+end
+
+local function TSM(source, itemID)
+  return TSMValue(source, "i:" .. itemID)
 end
 
 -- One of Auctionator's lookups (Auctionator.API.v1) for an item, or nil.
@@ -472,9 +493,9 @@ local function Atr(method, itemID)
 end
 
 -- Forever Companion's own note of an item: its lowest price, how many it
--- counted for sale, and how many seconds ago that was. It notes prices
--- whenever the auction house shows them to you, so its price is often the
--- newest there is.
+-- counted for sale, how many seconds ago that was, and when (its own stamp,
+-- which tells one note from the next). It notes prices whenever the auction
+-- house shows them to you, so its price is often the newest there is.
 local Now = time or (os and os.time)
 local function Companion(itemID)
   local companion = ForeverCompanion
@@ -487,7 +508,7 @@ local function Companion(itemID)
     return nil
   end
   local listed = type(entry.q) == "number" and entry.q > 0 and entry.q or nil
-  return entry.m, listed, math.max(0, Now() - entry.t)
+  return entry.m, listed, math.max(0, Now() - entry.t), entry.t
 end
 
 local function UseTSM()
@@ -517,6 +538,7 @@ local DAY, STALE_DAYS = 86400, 21   -- a price of your own not seen for three we
 -- the app may bring several: [realm, in small letters] = time.
 local loadedAt = Now()   -- when the game read this file: your login, or the last /reload
 local tsmTimes = {}
+local tsmSeen   -- the time worked out from them, kept until everything is judged afresh
 if type(TSM_APPHELPER_LOAD_DATA) == "function" then
   local deliver = TSM_APPHELPER_LOAD_DATA
   TSM_APPHELPER_LOAD_DATA = function(tag, realm, data, ...)
@@ -525,6 +547,7 @@ if type(TSM_APPHELPER_LOAD_DATA) == "function" then
       local at = head and head:find('"minBuyout"', 1, true) and tonumber(head:match("downloadTime=(%d+)"))
       if at then
         tsmTimes[realm:lower()] = at
+        tsmSeen = nil
       end
     end)
     return deliver(tag, realm, data, ...)
@@ -535,8 +558,12 @@ end
 -- came. When none was caught (TradeSkillMaster loaded its data before this
 -- file was read, or brings it some other way), they are taken to be an hour
 -- older than your login: its app fetches them about hourly, and the game only
--- reads them when it loads.
+-- reads them when it loads. It is the same for every item, so it is worked
+-- out once.
 local function TSMSeen()
+  if tsmSeen then
+    return tsmSeen
+  end
   local realm, faction = GetRealmName and GetRealmName(), UnitFactionGroup and UnitFactionGroup("player")
   local at = type(realm) == "string" and type(faction) == "string" and tsmTimes[(realm .. "-" .. faction):lower()]
   if not at then
@@ -544,28 +571,27 @@ local function TSMSeen()
       at = math.max(at or 0, other)
     end
   end
-  return at or (loadedAt - LIVE_SECONDS)
+  tsmSeen = at or (loadedAt - LIVE_SECONDS)
+  return tsmSeen
 end
 
 -- Auctionator only notes the day it last saw an item for sale (its days
--- start at midnight). Its price counts as seen when that day began, or, when
--- its last full scan was on that same day, at that scan.
+-- start at midnight). Its price counts as seen when that day began: on the
+-- day itself it can't say it saw the item any later than that.
+--
+-- The time of its last scan is not taken instead, as it was in 2.8. A scan is
+-- stamped when it starts, whether or not it ever reaches the item, so a price
+-- from hours earlier passed for the newest and was believed over a newer
+-- TradeSkillMaster snapshot (reported with Raw Winter Squid: 25s from an
+-- afternoon scan, quoted in place of 5s 95c).
 local function AuctionatorSeen(days)
   local now = Now()
-  local constants, state = Auctionator.Constants, Auctionator.SavedState
+  local constants = Auctionator.Constants
   local zero = type(constants) == "table" and constants.SCAN_DAY_0
   if type(zero) ~= "number" then
     return now - (days + 1) * DAY   -- no telling when its days begin: a full day back at the latest
   end
-  local began = zero + (math.floor((now - zero) / DAY) - days) * DAY
-  local scan = 0
-  for _, key in ipairs({ "TimeOfLastGetAllScan", "TimeOfLastReplicateScan", "TimeOfLastBrowseScan" }) do
-    local at = type(state) == "table" and state[key]
-    if type(at) == "number" and at > scan then
-      scan = at
-    end
-  end
-  return scan >= began and scan < began + DAY and scan <= now and scan or began
+  return zero + (math.floor((now - zero) / DAY) - days) * DAY
 end
 
 -- What the price addons know about an item. For the lowest auction price,
@@ -577,61 +603,81 @@ end
 -- Forever Companion saw within the hour; any other comes with how many days
 -- ago the item was seen. Your own notes are dropped once that is over three
 -- weeks.
-local function Market(itemID, gear)
-  local market = {}
-  local now = Now()
-  local price, at, listed, by, days   -- the newest so far
-  local function Offer(itsPrice, itsTime, itsCount, itsName, itsDays)
-    if itsPrice and itsPrice > 0 and (not at or itsTime > at) then
-      price, at, listed, by, days = itsPrice, itsTime, itsCount, itsName, itsDays
+--
+-- Each lookup is a call into another addon, so only what can matter is asked
+-- for. `gear`: its disenchant value as well. `dustOnly`: nothing but that
+-- (something soulbound can't be auctioned or bought back, so no price for it
+-- says anything). What it sells for across the region is only asked when
+-- nobody has a price here.
+--
+-- What Forever Companion and Auctionator said is kept as it was given (noted,
+-- notedCount, notedAt; scanPrice, scanAge, scanDust): they learn
+-- new prices while you play, and PricesChanged compares these to tell which
+-- items to judge again.
+local function Market(itemID, gear, dustOnly)
+  local market = { gear = gear or nil }
+  local item = "i:" .. itemID
+  local tsm, auctionator = UseTSM(), UseAuctionator()
+  if not dustOnly then
+    market.auction = true
+    local now = Now()
+    local price, at, by, days, count   -- the newest so far: ties go to whoever was asked first
+    local buyout = tsm and TSMValue("dbminbuyout", item) or nil
+    if buyout then
+      price, at = buyout, TSMSeen()
+    end
+    if UseCompanion() then
+      local noted, listed, age, stamp = Companion(itemID)
+      market.noted, market.notedCount, market.notedAt = noted, listed, stamp
+      if noted and age <= STALE_DAYS * DAY and (not at or now - age > at) then
+        price, at, by, days, count = noted, now - age, "Forever Companion", math.floor(age / DAY), listed
+      end
+    end
+    if auctionator then
+      local noted, seen = Atr("GetAuctionPriceByItemID", itemID), Atr("GetAuctionAgeByItemID", itemID)
+      market.scanPrice, market.scanAge = noted, seen
+      if noted and noted > 0 and seen then
+        local seenAt = AuctionatorSeen(seen)
+        if not at or seenAt > at then
+          price, at, by, days, count = noted, seenAt, "Auctionator", seen, nil
+        end
+      end
+    end
+    if price then
+      market.ahPrice, market.ahBy = price, by
+      if not by then
+        market.ahListed = TSMValue("dbnumauctions", item) or 0   -- TradeSkillMaster's
+      elseif by == "Forever Companion" and now - at <= LIVE_SECONDS then
+        -- Seen just now: given with how many are listed, like TradeSkillMaster's
+        -- (whose count stands in when Forever Companion took none).
+        market.ahListed = count or (buyout and (TSMValue("dbnumauctions", item) or 0)) or nil
+        market.ahSeen = not market.ahListed and 0 or nil
+      else
+        market.ahSeen = days
+      end
+    elseif tsm then
+      market.regionSale = TSMValue("dbregionsaleavg", item)
+    end
+    market.vendorBuy = tsm and TSMValue("vendorbuy", item) or nil
+    if auctionator and not market.vendorBuy then
+      local vendor = Atr("GetVendorPriceByItemID", itemID)
+      if vendor and vendor > 0 then
+        market.vendorBuy = vendor
+      end
     end
   end
-  local tsmListed
-  if UseTSM() then
-    local buyout = TSM("dbminbuyout", itemID)
-    tsmListed = buyout and (TSM("dbnumauctions", itemID) or 0) or nil
-    Offer(buyout, TSMSeen(), tsmListed)
-    market.regionSale, market.saleRate = TSM("dbregionsaleavg", itemID), TSM("dbregionsalerate", itemID)
-    market.vendorBuy = TSM("vendorbuy", itemID)
-    market.destroy = gear and TSM("destroy", itemID) or nil
+  if gear then
+    market.destroy = tsm and TSMValue("destroy", item) or nil
     market.destroyBy = market.destroy and "TradeSkillMaster" or nil
-  end
-  if UseCompanion() then
-    local noted, count, age = Companion(itemID)
-    if noted and age <= STALE_DAYS * DAY then
-      Offer(noted, now - age, count, "Forever Companion", math.floor(age / DAY))
-    end
-  end
-  if UseAuctionator() then
-    local noted, seen = Atr("GetAuctionPriceByItemID", itemID), Atr("GetAuctionAgeByItemID", itemID)
-    if noted and seen then
-      Offer(noted, AuctionatorSeen(seen), nil, "Auctionator", seen)
-    end
-  end
-  if price then
-    market.ahPrice, market.ahBy = price, by
-    if not by then
-      market.ahListed = listed   -- TradeSkillMaster's
-    elseif by == "Forever Companion" and now - at <= LIVE_SECONDS then
-      -- Seen just now: given with how many are listed, like TradeSkillMaster's
-      -- (whose count stands in when Forever Companion took none).
-      market.ahListed = listed or tsmListed
-      market.ahSeen = not market.ahListed and 0 or nil
-    else
-      market.ahSeen = days
-    end
-  end
-  if UseAuctionator() then
-    local vendor = not market.vendorBuy and Atr("GetVendorPriceByItemID", itemID)
-    if vendor and vendor > 0 then
-      market.vendorBuy = vendor
-    end
-    -- A disenchant value is an estimate, worked out from the addon's own
-    -- prices for the materials, and the two can be well apart. Where both
-    -- have one, the lower is used: disenchanting has to be clearly worth it.
-    local dust = gear and Atr("GetDisenchantPriceByItemID", itemID)
-    if dust and dust > 0 and (not market.destroy or dust < market.destroy) then
-      market.destroy, market.destroyBy = dust, "Auctionator"
+    if auctionator then
+      -- A disenchant value is an estimate, worked out from the addon's own
+      -- prices for the materials, and the two can be well apart. Where both
+      -- have one, the lower is used: disenchanting has to be clearly worth it.
+      local dust = Atr("GetDisenchantPriceByItemID", itemID)
+      market.scanDust = dust
+      if dust and dust > 0 and (not market.destroy or dust < market.destroy) then
+        market.destroy, market.destroyBy = dust, "Auctionator"
+      end
     end
   end
   return market
@@ -640,12 +686,117 @@ end
 ---------------------------------------------------------------------------
 -- Your bags
 ---------------------------------------------------------------------------
-local carried   -- [itemID] = { count, bound }; rebuilt after the bags change
 local container = C_Container or {}
 local NumSlots = container.GetContainerNumSlots or GetContainerNumSlots
 local SlotInfo = container.GetContainerItemInfo or GetContainerItemInfo
 local SlotItem = container.GetContainerItemID or GetContainerItemID
 local QuestInfo = container.GetContainerItemQuestInfo or GetContainerItemQuestInfo
+
+-- What you carry, all your bags together: [itemID] = { count, bound, and bag
+-- and slot of one stack of it }. The game says which bag changed, so each bag
+-- is kept as it was last read ([bag] = { [itemID] = { count, bound, slot } })
+-- and only the ones that changed are read again, when the answer is next
+-- wanted.
+local carried
+local bagStacks = {}
+local staleBags = {}    -- [bag] = true: it changed since it was read
+local allStale = true   -- every bag is to be read again
+local rescuedAt         -- when they were last all read again on a slot's say-so (Paint)
+
+-- A bag changed (BAG_UPDATE names it). With no bag named, any may have.
+local function BagChanged(bag)
+  rescuedAt = nil
+  if type(bag) ~= "number" then
+    allStale = true
+  elseif bag >= 0 and bag <= LAST_BAG then
+    staleBags[bag] = true
+  end
+end
+
+local function ReadBag(bag)
+  local stacks = {}
+  for slot = 1, (NumSlots and NumSlots(bag)) or 0 do
+    local info, count, _, _, _, _, _, _, _, itemID, isBound = SlotInfo(bag, slot)
+    if type(info) == "table" then
+      itemID, count, isBound = info.itemID, info.stackCount, info.isBound
+    end
+    if itemID then
+      local stack = stacks[itemID]
+      if not stack then
+        stack = { count = 0, slot = slot }
+        stacks[itemID] = stack
+      end
+      stack.count = stack.count + (count or 1)
+      stack.bound = stack.bound or isBound or nil
+    end
+  end
+  return stacks
+end
+
+-- Adds an item up over all the bags, as they were last read.
+local function Total(itemID)
+  local count, bound, bag, slot = 0, nil, nil, nil
+  for index = 0, LAST_BAG do
+    local stack = bagStacks[index] and bagStacks[index][itemID]
+    if stack then
+      count, bound = count + stack.count, bound or stack.bound
+      if not bag then
+        bag, slot = index, stack.slot
+      end
+    end
+  end
+  if not bag then
+    carried[itemID] = nil
+    return
+  end
+  local entry = carried[itemID]
+  if not entry then
+    entry = {}
+    carried[itemID] = entry
+  end
+  entry.count, entry.bound, entry.bag, entry.slot = count, bound, bag, slot
+end
+
+local function Carried()
+  if allStale or not carried then
+    carried, allStale = {}, false
+    for bag = 0, LAST_BAG do
+      staleBags[bag] = nil
+      bagStacks[bag] = ReadBag(bag)
+    end
+    for bag = 0, LAST_BAG do
+      for itemID in pairs(bagStacks[bag]) do
+        if not carried[itemID] then
+          Total(itemID)
+        end
+      end
+    end
+  elseif next(staleBags) ~= nil then
+    for bag in pairs(staleBags) do
+      staleBags[bag] = nil
+      local before = bagStacks[bag] or {}
+      bagStacks[bag] = ReadBag(bag)
+      for itemID in pairs(before) do
+        Total(itemID)
+      end
+      for itemID in pairs(bagStacks[bag]) do
+        if not before[itemID] then
+          Total(itemID)
+        end
+      end
+    end
+  end
+  return carried
+end
+
+-- A slot in one of your bags is seen to hold this item. If the bags weren't
+-- known to hold it, they changed without the game saying which (or it hasn't
+-- said yet): they are all read again, at most once a second.
+local function Seen(itemID, bag)
+  if type(bag) == "number" and bag >= 0 and bag <= LAST_BAG and not Carried()[itemID] and rescuedAt ~= Now() then
+    rescuedAt, allStale = Now(), true
+  end
+end
 
 -- Whether the game itself calls the item in a slot a quest item, and the quest
 -- it starts if it is one of those.
@@ -663,29 +814,23 @@ local function SlotQuest(bag, slot)
   return isQuestItem == true, type(questID) == "number" and questID > 0 and questID or nil
 end
 
-local function Carried()
-  if carried then
-    return carried
-  end
-  carried = {}
-  for bag = 0, LAST_BAG do
-    for slot = 1, (NumSlots and NumSlots(bag)) or 0 do
-      local info, count, _, _, _, _, _, _, _, itemID, isBound = SlotInfo(bag, slot)
-      if type(info) == "table" then
-        itemID, count, isBound = info.itemID, info.stackCount, info.isBound
-      end
-      if itemID then
-        local entry = carried[itemID] or { count = 0 }
-        entry.count = entry.count + (count or 1)
-        entry.bound = entry.bound or isBound or nil
-        local questItem, startsQuest = SlotQuest(bag, slot)
-        entry.questItem = entry.questItem or questItem or nil
-        entry.startsQuest = entry.startsQuest or startsQuest
-        carried[itemID] = entry
-      end
+-- The same for an item you carry. It is the item's own nature, the same for
+-- every stack, so it is asked of one stack when the item is judged, and
+-- remembered until everything is judged afresh. The third value is true when
+-- that can't be asked just now: the slot the item was read in holds something
+-- else (the bags changed a moment ago and haven't been read again).
+local questFlags = {}   -- [itemID] = { whether it is a quest item, the quest it starts }
+local function QuestFlags(itemID, mine)
+  local known = questFlags[itemID]
+  if not known then
+    if not (mine.bag and mine.slot) or (SlotItem and SlotItem(mine.bag, mine.slot) ~= itemID) then
+      return nil, nil, true
     end
+    local questItem, startsQuest = SlotQuest(mine.bag, mine.slot)
+    known = { questItem or false, startsQuest or false }
+    questFlags[itemID] = known
   end
-  return carried
+  return known[1] or nil, known[2] or nil
 end
 
 ---------------------------------------------------------------------------
@@ -738,7 +883,11 @@ end
 ---------------------------------------------------------------------------
 -- The verdict for an item you carry
 ---------------------------------------------------------------------------
-local verdicts = {}   -- [itemID] = { count, result or false }; emptied when quests or settings change
+-- [itemID] = { count, result or false, market }; emptied when quests or
+-- settings change. `market` is what the price addons said when the item was
+-- judged, if they were asked: see PricesChanged.
+local verdicts = {}
+local NO_MARKET = {}   -- stands for "no prices were asked for"
 
 -- Tools are left alone unless /smooth ignore says otherwise; anything else is
 -- judged unless /smooth ignore says otherwise.
@@ -751,7 +900,8 @@ local function Ignored(itemID, classID, subclassID)
 end
 
 local function Judge(itemID, mine)
-  local name, _, quality, _, _, _, _, _, equipSlot, _, sellPrice, classID, subclassID, bindType = GetItemInfo(itemID)
+  local name, _, quality, _, _, _, _, _, equipSlot, _, sellPrice, classID, subclassID, bindType, _, _, craftingReagent =
+    GetItemInfo(itemID)
   if not name then
     return nil, true   -- the game hasn't loaded this item yet: ask again later
   end
@@ -786,9 +936,10 @@ local function Judge(itemID, mine)
     or (equipSlot ~= nil and equipSlot ~= "" and equipSlot ~= "INVTYPE_NON_EQUIP_IGNORE" and equipSlot ~= "INVTYPE_NON_EQUIP")
   -- Usable: it has a "Use:" of its own and isn't worn. A sleeping bag, a
   -- mount's reins, a salt shaker. Soulbound, such a thing is for using, not
-  -- for selling (reported with the Cozy Sleeping Bag, marked to vendor).
+  -- for selling (reported with the Cozy Sleeping Bag, marked to vendor). It
+  -- only matters for something soulbound, so it is only asked of those.
   local usable = false
-  if not wearable and GetItemSpell then
+  if bound and not wearable and GetItemSpell then
     local ok, spell, spellID = pcall(GetItemSpell, itemID)
     usable = ok and (spell ~= nil or spellID ~= nil)
   end
@@ -810,11 +961,14 @@ local function Judge(itemID, mine)
     questBrief = ready and "hand its quest in" or "in your quest log"
   end
   if not quest then
-    local questItem = classID == QUEST_ITEM or bindType == BIND_QUEST or mine.questItem
-    if questItem or mine.startsQuest or sellPrice <= 0 or bound or questDone then
+    local flagged, starts, moved = QuestFlags(itemID, mine)   -- the game's own word: a quest item, and the quest it starts
+    if moved then
+      return nil, true   -- the bags changed a moment ago and aren't read yet: ask again later
+    end
+    local questItem = classID == QUEST_ITEM or bindType == BIND_QUEST or flagged
+    if questItem or starts or sellPrice <= 0 or bound or questDone then
       local done, detail, starter = QuestsAllDone(itemID, name)   -- true, false, or nil when Questie has nothing on it
       unsettled = detail == "wait"                                 -- Questie is still starting: ask again later
-      local starts = mine.startsQuest
       if starts and not QuestDone(starts) then
         done = false
       end
@@ -853,10 +1007,22 @@ local function Judge(itemID, mine)
     questBrief = "your quest log isn't read yet"
   end
   -- Disenchanting is compared for green or better weapons and armour.
-  local market = Market(itemID, (quality or 0) >= UNCOMMON and (classID == WEAPON or classID == ARMOR))
+  local gear = (quality or 0) >= UNCOMMON and (classID == WEAPON or classID == ARMOR)
+  local onQuest = need ~= nil and quest and not hold and OnQuest(need.questID)
+  -- Prices are only asked for where they can change the verdict: not for an
+  -- item kept for its quest whatever it costs, and for a soulbound one only
+  -- what disenchanting it would yield.
+  local market = NO_MARKET
+  if not (quest and (hold or onQuest)) and (not bound or gear) then
+    market = Market(itemID, gear, bound)
+  end
   local result = ns.Decide({
     count = mine.count,
-    consumable = classID == CONSUMABLE,
+    -- Something you use up, and would keep for that. Not food or a potion the
+    -- game also marks as a crafting reagent (raw fish, say): that is a
+    -- material, priced like cloth or ore (reported with Raw Winter Squid, 7c
+    -- from a vendor and silvers at auction, marked "keep it").
+    consumable = classID == CONSUMABLE and craftingReagent ~= true,
     usable = usable,
     quest = quest,
     questNote = questNote,
@@ -864,7 +1030,7 @@ local function Judge(itemID, mine)
     doneNote = doneNote,
     needed = need and need.needed,
     hold = hold,
-    onQuest = need ~= nil and quest and not hold and OnQuest(need.questID),
+    onQuest = onQuest,
     questDone = questDone,
     bound = bound,
     quality = quality,
@@ -875,17 +1041,20 @@ local function Judge(itemID, mine)
     ahSeen = market.ahSeen,
     ahBy = market.ahBy,
     regionSale = market.regionSale,
-    saleRate = market.saleRate,
     destroy = market.destroy,
     destroyBy = market.destroyBy,
     noPrices = not (UseTSM() or UseAuctionator() or UseCompanion()),
-    enchanter = IsEnchanter(),
+    enchanter = Enchanter(),
   }, settings.limit)
   if result then
     result.itemID, result.by = itemID, by
     result.questID, result.guides = need and need.questID, need and need.guides
+    -- How often its auctions sell is only ever said of an item to auction.
+    if result.verdict == "auction" and result.why == "costly" and UseTSM() then
+      result.saleRate = TSM("dbregionsalerate", itemID)
+    end
   end
-  return result, unsettled
+  return result, unsettled, market ~= NO_MARKET and market or nil
 end
 
 -- The verdict for an item in your bags, or nil when there is nothing to say:
@@ -908,7 +1077,7 @@ function ns.Check(itemID)
   if known and known.count == mine.count then
     return known.result or nil
   end
-  local result, later
+  local result, later, market
   if locked then
     result = { verdict = "locked", why = "locked", itemID = itemID, count = mine.count }
   else
@@ -918,11 +1087,11 @@ function ns.Check(itemID)
     elseif settings.reagents and Reagent(itemID) then
       result = { verdict = "keep", why = "reagent", itemID = itemID, count = mine.count }
     else
-      result, later = Judge(itemID, mine)
+      result, later, market = Judge(itemID, mine)
     end
   end
   if not later then
-    verdicts[itemID] = { count = mine.count, result = result or false }
+    verdicts[itemID] = { count = mine.count, result = result or false, market = market }
   end
   return result, later   -- later: the game hasn't loaded the item yet
 end
@@ -1017,6 +1186,7 @@ local function Paint(button, itemID, bag, slot, corner, merged, keep)
   keep = keep or button
   local mark
   if settings.icons and itemID then
+    Seen(itemID, bag)
     local result = ns.Check(itemID)
     mark = result and MARKS[result.verdict]
   end
@@ -1090,7 +1260,12 @@ end
 local function PaintSlot(button, bag, slot)
   local itemID = InBags(bag) and type(slot) == "number" and SlotItem and SlotItem(bag, slot) or nil
   Paint(button, itemID, bag, slot)
-  slots[button] = { bag, slot }
+  local where = slots[button]
+  if type(where) == "table" then
+    where[1], where[2] = bag, slot
+  else
+    slots[button] = { bag, slot }
+  end
 end
 
 local function PaintWindow(window)
@@ -1138,6 +1313,7 @@ local function BaganatorUpdate(texture, details)
   if not settings.icons or not details.itemID or type(where) ~= "table" or not InBags(where.bagID) then
     return false
   end
+  Seen(details.itemID, where.bagID)
   local result, later = ns.Check(details.itemID)
   if later then
     return nil   -- Baganator asks again once the item has loaded
@@ -1491,12 +1667,15 @@ end
 ---------------------------------------------------------------------------
 -- /smooth
 ---------------------------------------------------------------------------
--- Verdicts depend on quests and settings as well as on what you carry.
+-- Verdicts depend on quests and settings as well as on what you carry. This
+-- drops everything that was worked out, so all of it is asked again.
 local function Forget()
   verdicts = {}
   quantities = {}
   questLog = nil
   setItems = nil
+  questFlags = {}
+  questieFound, tsmSeen, enchanter = nil, nil, nil
 end
 
 local ORDER = { vendor = 1, free = 2, disenchant = 3, auction = 4, keep = 5, quest = 6, locked = 7 }
@@ -1871,6 +2050,42 @@ function ns.Summary()
   return summary
 end
 
+-- Auction prices change while you play: Forever Companion notes them as the
+-- auction house shows them, Auctionator when you scan or search. Nothing else
+-- a verdict hangs on changes with them, and most items' prices don't either.
+-- So only the items one of the two has noted anew are judged again: each
+-- verdict remembers what they said of its item (its `market`), and that is
+-- compared with what they say now. `companion`, `auctionator`: which of them
+-- may have learned something.
+local function PricesChanged(companion, auctionator)
+  companion, auctionator = companion and UseCompanion(), auctionator and UseAuctionator()
+  local changed = false
+  for itemID, known in pairs(verdicts) do
+    local market, anew = known.market, false
+    if market and market.auction then
+      if companion then
+        local noted, listed, _, stamp = Companion(itemID)
+        anew = noted ~= market.noted or listed ~= market.notedCount or stamp ~= market.notedAt
+      end
+      if auctionator and not anew then
+        anew = Atr("GetAuctionPriceByItemID", itemID) ~= market.scanPrice
+          or Atr("GetAuctionAgeByItemID", itemID) ~= market.scanAge
+      end
+    end
+    -- A scan also moves the prices of the materials gear is disenchanted into.
+    if market and market.gear and auctionator and not anew then
+      anew = Atr("GetDisenchantPriceByItemID", itemID) ~= market.scanDust
+    end
+    if anew then
+      verdicts[itemID] = nil
+      changed = true
+    end
+  end
+  if changed then
+    RefreshIcons()
+  end
+end
+
 -- Auctionator says when a scan has changed its prices; a scan reports in
 -- bursts, so wait for it to settle.
 local auctionatorHooked, scanSettling
@@ -1882,8 +2097,7 @@ local function HookAuctionator()
   auctionatorHooked = true
   local function Settled()
     scanSettling = nil
-    Forget()
-    RefreshIcons()
+    PricesChanged(false, true)
   end
   pcall(api.RegisterForDBUpdate, ADDON, function()
     if not (C_Timer and C_Timer.After) then
@@ -1897,7 +2111,7 @@ end
 
 -- Forever Companion notes prices as the auction house shows them, and doesn't
 -- say when it has. So a moment after the auction house has shown something,
--- and when it closes, everything is judged afresh.
+-- and when it closes, its notes are looked at again.
 local AUCTION_EVENTS = { AUCTION_HOUSE_BROWSE_RESULTS_UPDATED = true, AUCTION_HOUSE_BROWSE_RESULTS_ADDED = true,
   COMMODITY_SEARCH_RESULTS_UPDATED = true, AUCTION_ITEM_LIST_UPDATE = true, REPLICATE_ITEM_LIST_UPDATE = true,
   AUCTION_HOUSE_CLOSED = true }
@@ -1908,14 +2122,25 @@ local function PricesSeen()
   end
   local function Settled()
     pricesSettling = nil
-    Forget()
-    RefreshIcons()
+    PricesChanged(true, false)
   end
   if not (C_Timer and C_Timer.After) then
     Settled()
   elseif not pricesSettling then
     pricesSettling = true
     C_Timer.After(2, Settled)
+  end
+end
+
+-- A skill went up, or a spell was learned. Of all that, only one thing
+-- matters here: whether you can disenchant. Skills go up all the time while
+-- you play, so nothing is judged again unless that has changed.
+local function SkillsChanged()
+  local was = enchanter
+  enchanter = nil
+  if was ~= nil and Enchanter() ~= was then
+    verdicts = {}
+    RefreshIcons()
   end
 end
 
@@ -1949,8 +2174,8 @@ end
 ---------------------------------------------------------------------------
 local frame = CreateFrame("Frame")
 for _, event in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "BAG_UPDATE", "BAG_UPDATE_DELAYED", "QUEST_ACCEPTED",
-  "QUEST_REMOVED", "QUEST_TURNED_IN", "SKILL_LINES_CHANGED", "UI_ERROR_MESSAGE", "GLOBAL_MOUSE_DOWN",
-  "QUEST_LOG_UPDATE", "EQUIPMENT_SETS_CHANGED" }) do
+  "QUEST_REMOVED", "QUEST_TURNED_IN", "SKILL_LINES_CHANGED", "SPELLS_CHANGED", "UI_ERROR_MESSAGE", "GLOBAL_MOUSE_DOWN",
+  "QUEST_LOG_UPDATE", "EQUIPMENT_SETS_CHANGED", "PLAYER_ENTERING_WORLD", "BAG_CONTAINER_UPDATE" }) do
   pcall(frame.RegisterEvent, frame, event)
 end
 for event in pairs(AUCTION_EVENTS) do
@@ -1966,6 +2191,10 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
     end
   elseif event == "QUEST_LOG_UPDATE" then
     QuestLogChanged()
+  elseif event == "SKILL_LINES_CHANGED" or event == "SPELLS_CHANGED" then
+    SkillsChanged()
+  elseif event == "PLAYER_ENTERING_WORLD" or event == "BAG_CONTAINER_UPDATE" then
+    BagChanged(nil)   -- a new place, or a bag put on or taken off: read every bag again when next asked
   elseif event == "ADDON_LOADED" then
     if name == ADDON then
       SmoothBrainDB = type(SmoothBrainDB) == "table" and SmoothBrainDB or {}
@@ -2018,9 +2247,8 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
       FlashCheapest(worth ~= nil and not quest and worth or nil)
     end
   elseif event == "BAG_UPDATE" then
-    carried = nil
+    BagChanged(name)   -- the bag that changed
   elseif event == "BAG_UPDATE_DELAYED" then
-    carried = nil
     if next(dropping) == nil then
       RefreshIcons()
     elseif HasFreeSlot() then
@@ -2029,7 +2257,7 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
       ChooseStacks()   -- the bags changed but are still full: choose again, as stacks may have moved
     end
   else
-    -- A quest was taken, dropped or handed in, a profession learned, or an equipment set changed.
+    -- A quest was taken, dropped or handed in, or an equipment set changed.
     Forget()
     RefreshIcons()
   end

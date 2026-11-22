@@ -20,7 +20,8 @@ ns.FRESH_DAYS = 1
 --
 -- facts (prices per unit, in copper):
 --   count       how many you carry
---   consumable  something you use up (a potion, food, a bandage)
+--   consumable  something you use up (a potion, food, a bandage), and not
+--               also a crafting reagent
 --   usable      something with a Use of its own that you don't wear (a sleeping
 --               bag, a mount's reins)
 --   quest      a quest you haven't done needs it: a RestedXP guide says so,

@@ -58,7 +58,7 @@ a list without the icon column shows no markers.
 | gold coin | vendor it | costs little more to buy again than a vendor pays |
 | gavel | auction it | worth clearly more than a vendor pays |
 | Disenchant icon | disenchant it | green or better gear worth more as enchanting materials |
-| green tick | keep it | the same, for things you use up (potions, food, bandages); soulbound things with a Use of their own (a sleeping bag, a mount); things a vendor won't buy; gear in one of your equipment sets; your class's reagents |
+| green tick | keep it | the same, for things you use up (potions, food, bandages; not ones that are crafting reagents, such as raw fish, which are priced like any material); soulbound things with a Use of their own (a sleeping bag, a mount); things a vendor won't buy; gear in one of your equipment sets; your class's reagents |
 | yellow ! | keep it for its quest | a quest item whose quest isn't done, or an item a RestedXP guide needs that isn't cheap to get back |
 | red cross | safe to delete | a quest item whose quests are all done, that vendors don't buy |
 | padlock | keep it (you locked it) | an item you locked yourself; see below |
@@ -181,10 +181,10 @@ Each addon dates its prices in its own way:
   you, to the second. Its price counts whichever addon you chose above;
   `/smooth companion off` leaves its prices alone.
 - **Auctionator**'s come from your own scans and searches, and it only notes
-  the day. Its price counts as seen when that day began, or at its last full
-  scan when that was the same day. So on the day itself a newer snapshot or a
-  price Forever Companion saw is preferred, since Auctionator can't say it
-  saw the item later.
+  the day. Its price counts as seen when that day began. So on the day itself
+  a snapshot or a price Forever Companion saw is preferred, since Auctionator
+  can't say it saw the item later; its price is taken over a snapshot from
+  before that day, and where nobody else has one.
 
 A price from your own scans comes without a count of how many are listed
 (unless Forever Companion saw it within the hour); the tooltip then says who
@@ -328,6 +328,11 @@ gets the padlock.
 `python dev/test.py` runs the addon's real files against stand-ins for the
 game and the other addons. Needs Python with `lupa`
 (`python -m pip install lupa`).
+
+`python dev/perf.py` prints how much work the addon does for each thing that
+happens in the game (a skill going up, a bag changing, the auction house
+showing results), with a full set of bags: its own time, the memory it throws
+away, and how often it calls into the game and the other addons.
 
 `python dev/release.py build` runs the tests and then makes the zip that
 goes to CurseForge, in `dev/dist/`.

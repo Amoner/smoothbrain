@@ -122,7 +122,8 @@ ItemRefTooltip = {}
 local SHIFT = false
 function IsShiftKeyDown() return SHIFT end
 
--- Items: [id] = { vendor sell price, bind type, quality (1), class (7, trade goods), subclass (0), equip slot ("") }
+-- Items: [id] = { vendor sell price, bind type, quality (1), class (7, trade goods), subclass (0), equip slot (""),
+--   whether the game marks it a crafting reagent }
 local ITEMS = {
   [100] = { 12, 0 },   -- cheap meat, plenty on the auction house; a quest needs 10
   [101] = { 50, 0 },   -- pricey hide a quest needs
@@ -197,7 +198,7 @@ C_Item = { GetItemInfo = function(id)
   if not item then return nil end
   -- As on the current client: things you can't wear have a slot name too, not an empty one.
   return "Item" .. id, "[Item" .. id .. "]", item[3] or 1, 1, 0, "", "", 20, item[6] or "INVTYPE_NON_EQUIP_IGNORE", 0, item[1], item[4] or 7,
-    item[5] or 0, item[2]
+    item[5] or 0, item[2], 0, nil, item[7] == true
 end }
 -- The spell behind an item's "Use:", for the items that have one: its name and number.
 local USES = { [173] = 439, [120] = 439 }   -- the potions
@@ -220,9 +221,11 @@ local BOUND = { [102] = true, [114] = true, [122] = true, [123] = true, [124] = 
 local ENCHANTER = false
 function IsPlayerSpell(spell) return ENCHANTER and spell == 13262 end
 function GetSpellTexture(spell) return spell == 13262 and 136244 or nil end
+local slotReads = {}   -- [bag] = how often one of its slots was read
 C_Container = {
   GetContainerNumSlots = function(bag) return BAGS[bag] and #BAGS[bag] or 0 end,
   GetContainerItemInfo = function(bag, slot)
+    slotReads[bag] = (slotReads[bag] or 0) + 1
     local stack = BAGS[bag] and BAGS[bag][slot]
     return stack and { itemID = stack[1], stackCount = stack[2], isBound = BOUND[stack[1]] == true } or nil
   end,
@@ -351,9 +354,11 @@ local PRICES = {
   vendorbuy = { [104] = 60 },
 }
 local priceLookups = 0   -- how often TradeSkillMaster was asked: judging an item afresh asks it again
+local priceAsked = {}    -- [itemID] = the price sources it was asked for, in order
 TSM_API = { GetCustomPriceValue = function(source, itemString)
   priceLookups = priceLookups + 1
   local id = tonumber(itemString:match("^i:(%d+)$"))
+  if id then priceAsked[id] = (priceAsked[id] and (priceAsked[id] .. " ") or "") .. source end
   local value = PRICES[source] and PRICES[source][id]
   if value then return value end
   return nil, "no value"
@@ -807,6 +812,99 @@ Fire("SKILL_LINES_CHANGED")
 ContainerFrame1:UpdateItems()
 Check("the game's own bags: every marker, none on the Mining Pick", Mark(modern[1]) == COIN and Mark(modern[2]) == GAVEL
   and Mark(modern[3]) == TICK and Mark(modern[4]) == QUEST and Mark(modern[5]) == CROSS and Mark(modern[6]) == nil, tostring(Mark(modern[1])))
+
+-- Skills go up all the time while you play. Nothing is judged again for it,
+-- unless it is Disenchant that was learned or lost.
+do
+  local asked = priceLookups
+  Fire("SKILL_LINES_CHANGED")
+  Fire("SPELLS_CHANGED")
+  Check("a skill going up judges nothing afresh", priceLookups == asked and Mark(wornGloves) == COIN, priceLookups - asked)
+  ENCHANTER = true
+  Fire("SPELLS_CHANGED")
+  Check("...learning Disenchant does, however the game announces it", Verdict(132) == "disenchant/dust" and Mark(wornGloves) == DUST
+    and priceLookups > asked, Verdict(132))
+  ENCHANTER = false
+  Fire("SKILL_LINES_CHANGED")
+  Check("...and so does losing it", Verdict(132) == "vendor/boundsell" and Mark(wornGloves) == COIN, Verdict(132))
+end
+
+-- Each price is a call into another addon, so only those that can change the
+-- verdict are asked for.
+do
+  priceAsked = {}
+  Fire("QUEST_ACCEPTED", 1, 1)
+  SlashCmdList.SMOOTHBRAIN("all")   -- judges everything you carry, each item once
+  printed = {}
+  Check("a tradeable item with a price here: its price, how many are listed, what a vendor charges",
+    priceAsked[111] == "dbminbuyout dbnumauctions vendorbuy", priceAsked[111])
+  Check("...one with no price here: what it sells for across the region as well", priceAsked[117] ~= nil
+    and priceAsked[117]:find("^dbminbuyout dbregionsaleavg vendorbuy") ~= nil, priceAsked[117])
+  Check("...one to auction: how often its auctions sell, too", priceAsked[118] == "dbminbuyout dbnumauctions vendorbuy dbregionsalerate",
+    priceAsked[118])
+  Check("something soulbound: nothing, as it can't be sold or bought back", priceAsked[102] == nil and priceAsked[125] == nil
+    and priceAsked[173] == nil and priceAsked[171] == nil, tostring(priceAsked[125]))
+  Check("...unless it is gear: what disenchanting it would yield, and no more", priceAsked[132] == "destroy", priceAsked[132])
+  Check("an item kept for the quest you are on, whatever it costs: nothing", Verdict(106) == "quest/onquest" and priceAsked[106] == nil,
+    tostring(priceAsked[106]))
+end
+
+-- The game says which bag changed, and only that bag is read again.
+do
+  ns.Check(111)
+  slotReads = {}
+  BAGS[5][1][2] = 9                    -- the stack in the reagent bag grows
+  Fire("BAG_UPDATE", 5)
+  Fire("BAG_UPDATE_DELAYED")
+  Check("a change in one bag has only that bag read again", ns.Check(170).count == 9 and slotReads[5] == #BAGS[5] and slotReads[0] == nil,
+    tostring(slotReads[5]) .. "/" .. tostring(slotReads[0]))
+  BAGS[5][2] = { 111, 7 }              -- Spider Ichor there as well as in the backpack
+  Fire("BAG_UPDATE", 5)
+  Fire("BAG_UPDATE_DELAYED")
+  Check("an item is counted across your bags", ns.Check(111).count == 17 and Mark(ichor) == COIN, ns.Check(111).count)
+  BAGS[5][2] = nil
+  BAGS[5][1][2] = 4
+  Fire("BAG_UPDATE", 5)
+  Fire("BAG_UPDATE_DELAYED")
+  Check("...and no longer once it has left one", ns.Check(111).count == 10 and ns.Check(170).count == 4, ns.Check(111).count)
+  slotReads = {}
+  Fire("BAG_UPDATE", 7)                -- a bag in the bank
+  Fire("BAG_UPDATE_DELAYED")
+  ns.Check(111)
+  Check("a change in the bank has nothing read", next(slotReads) == nil, next(slotReads))
+  BAGS[5][1][2] = 6
+  Fire("BAG_UPDATE")                   -- no bag named
+  Fire("BAG_UPDATE_DELAYED")
+  Check("a change with no bag named has every bag read", ns.Check(170).count == 6 and slotReads[0] == #BAGS[0]
+    and slotReads[5] == #BAGS[5], tostring(slotReads[0]))
+  BAGS[5][1][2] = 4
+  Fire("PLAYER_ENTERING_WORLD")
+  Check("...and so does arriving somewhere", ns.Check(170).count == 4, ns.Check(170).count)
+  -- The game hasn't said a bag changed, yet a slot shows something new.
+  Fire("BAG_UPDATE", 3)                -- (an empty bag: any reading-again from earlier this second is forgotten)
+  BAGS[0][12] = { 153, 2 }             -- where the Spider Ichor was
+  ContainerFrame1:UpdateItems()
+  Check("a slot holding something the bags weren't known to hold has them read again", Verdict(153) == "auction/costly"
+    and Mark(modern[1]) == GAVEL and ns.Check(111) == nil, Verdict(153))
+  BAGS[0][12] = { 111, 10 }
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  Check("...and when the game does say, that is followed", Mark(modern[1]) == COIN and Verdict(153) == "nil" and ns.Check(111).count == 10,
+    Verdict(153))
+  -- An item is asked about in the slot it was last read in. If something
+  -- else is there by now, it isn't judged until the bags have been read.
+  local where
+  for slot, stack in ipairs(BAGS[0]) do
+    if stack[1] == 160 then where = slot end
+  end
+  local stack = BAGS[0][where]
+  Fire("QUEST_ACCEPTED", 1, 1)         -- everything is to be judged afresh
+  BAGS[0][where] = { 108, 1 }
+  local result, later = ns.Check(160)
+  Check("an item whose slot holds something else by now gets no verdict yet", result == nil and later == true, tostring(later))
+  BAGS[0][where] = stack
+  Check("...and the game's word on it is asked for once the slot is its own again", Verdict(160) == "quest/held", Verdict(160))
+end
 local widget = widgets.smooth_brain
 Check("Baganator: one corner widget, starting bottom left", widget ~= nil and widget.label == "Smooth Brain"
   and widget.position.corner == "bottom_left")
@@ -1073,7 +1171,7 @@ do
   -- Forever Companion alone
   local tsmWas, auctionatorWas = TSM_API, Auctionator
   TSM_API, Auctionator = nil, nil
-  Seen()
+  Fire("QUEST_ACCEPTED", 1, 1)
   found = ns.Detect()
   local state = ns.Setup.Verdict(found)
   Check("with no other price addon its prices do", ns.Check(111).price == 30 and ns.Check(111).seen == 0
@@ -1112,9 +1210,8 @@ do
   local now, DAY = os.time(), 86400
   local NOTED = {}
   ForeverCompanion = { GetAuctionEntry = function(self, id) return NOTED[id] end }
-  local function Again()   -- the auction house closes: everything is judged afresh
-    Fire("AUCTION_HOUSE_CLOSED")
-    RunTimers()
+  local function Again()   -- everything is judged afresh, with the clocks as they now stand
+    Fire("QUEST_ACCEPTED", 1, 1)
   end
   local function Ichor()
     local result = ns.Check(111)
@@ -1150,13 +1247,18 @@ do
   AppData("Somewhere-Alliance", now - 8 * 3600)
   Again()
   Check("a snapshot from before its day began is older for certain: Auctionator's", Ichor() == "25/nil/0/Auctionator", Ichor())
+  -- Auctionator stamps a scan when it starts, whether or not it reaches the
+  -- item. The case reported: Raw Winter Squid, 25s from an afternoon scan,
+  -- taken over a TradeSkillMaster snapshot from that evening because another
+  -- scan had been started since.
   AppData("Somewhere-Alliance", now - 5 * 3600)
-  Auctionator.SavedState = { TimeOfLastGetAllScan = now - 3600 }
+  Auctionator.SavedState = { TimeOfLastBrowseScan = now - 3600, TimeOfLastGetAllScan = now - 3600, TimeOfLastReplicateScan = now - 3600 }
   Again()
-  Check("Auctionator scanned everything an hour ago, the same day it saw the item: Auctionator's", Ichor() == "25/nil/0/Auctionator", Ichor())
+  Check("a scan Auctionator started since the snapshot says nothing of when it saw this item: TradeSkillMaster's",
+    Ichor() == "19/112/nil/nil", Ichor())
   ATR.age[111] = 1
   Again()
-  Check("...but an item it last saw yesterday wasn't in that scan: TradeSkillMaster's", Ichor() == "19/112/nil/nil", Ichor())
+  Check("...and an item it last saw yesterday is older still", Ichor() == "19/112/nil/nil", Ichor())
   NOTED[111] = { m = 30, q = 500, t = now - 20 * 3600 }
   AppData("Somewhere-Alliance", now - 3 * DAY)
   Again()
@@ -1165,11 +1267,7 @@ do
   Again()
   Check("...and without it, Auctionator's from yesterday over a snapshot three days old", Ichor() == "25/nil/1/Auctionator", Ichor())
   ATR.age[111] = 0
-  Auctionator.SavedState.TimeOfLastGetAllScan = now + 3600
-  AppData("Somewhere-Alliance", now - 5 * 3600)
-  Again()
-  Check("a scan time in the future is not believed", Ichor() == "19/112/nil/nil", Ichor())
-  Auctionator.SavedState.TimeOfLastGetAllScan = now - 3600
+  AppData("Somewhere-Alliance", now - 8 * 3600)   -- your realm's snapshot: from before Auctionator's day began
   -- The app may bring several realms' prices
   AppData("Elsewhere-Horde", now - 60)
   Again()
@@ -1198,6 +1296,89 @@ do
   ForeverCompanion = nil
   Fire("QUEST_ACCEPTED", 1, 1)
   Check("...and all is as before", Ichor() == "19/112/nil/nil" and ns.Check(140).price == 14, Ichor())
+end
+
+-- Prices are noted anew while you play: by Forever Companion as the auction
+-- house shows them, by Auctionator as it scans. Only the items they are for
+-- are judged again, and nothing else is read again for it.
+do
+  local NOTED, now = {}, os.time()
+  ForeverCompanion = { GetAuctionEntry = function(self, id) return NOTED[id] end }
+  Fire("QUEST_ACCEPTED", 1, 1)
+  SlashCmdList.SMOOTHBRAIN("all")   -- everything you carry is judged
+  printed = {}
+  local logReads, GetInfo = 0, C_QuestLog.GetInfo
+  C_QuestLog.GetInfo = function(...)
+    logReads = logReads + 1
+    return GetInfo(...)
+  end
+  local function Seen()
+    Fire("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    RunTimers()
+  end
+  local function Scanned()
+    atrChanged()
+    RunTimers()
+  end
+  local function Others(itemID)   -- how many items other than this one were priced again
+    local others = 0
+    for id in pairs(priceAsked) do
+      if id ~= itemID then others = others + 1 end
+    end
+    return others
+  end
+  priceAsked = {}
+  Seen()
+  Check("the auction house shows something, and Forever Companion has noted nothing new: nothing is judged again",
+    next(priceAsked) == nil and logReads == 0, next(priceAsked))
+  NOTED[111] = { m = 30, q = 500, t = now - 30 }   -- half a minute ago: after TradeSkillMaster's snapshot
+  Seen()
+  Check("it has noted one item's price: that item is judged again", ns.Check(111).price == 30 and ns.Check(111).listed == 500
+    and priceAsked[111] ~= nil, ns.Check(111).price)
+  Check("...and no other, nor is your quest log read again", Others(111) == 0 and logReads == 0, Others(111))
+  priceAsked = {}
+  Seen()
+  Check("...and not a second time for the same note", next(priceAsked) == nil, next(priceAsked))
+  NOTED[111] = { m = 30, q = 480, t = now - 10 }
+  Seen()
+  Check("a later note of the same price, with another count, is followed too", ns.Check(111).listed == 480 and Others(111) == 0,
+    ns.Check(111).listed)
+  NOTED[111] = nil
+  Seen()
+  Check("...and so is its note going", ns.Check(111).price == 19 and ns.Check(111).listed == 112, ns.Check(111).price)
+  -- Auctionator
+  priceAsked = {}
+  Scanned()
+  Check("Auctionator reports, with no price of yours changed: nothing is judged again", next(priceAsked) == nil, next(priceAsked))
+  ATR.price[140] = 400
+  Scanned()
+  Check("its scan changed one price: that item is judged again, and no other", Verdict(140) == "auction/costly" and Others(140) == 0
+    and logReads == 0, Others(140))
+  ATR.price[140] = 14
+  ATR.dust[145] = 100   -- what its gloves disenchant into is worth less after the scan
+  priceAsked = {}
+  Scanned()
+  local cheap, gloves = Verdict(140), Verdict(145)   -- neither is on a slot that shows: they are judged when asked
+  Check("...and when it moved what gear disenchants into, that gear", cheap == "vendor/cheap" and gloves == "vendor/nodust"
+    and priceAsked[145] ~= nil and Others(145) == 1, gloves)
+  ATR.dust[145] = 3000
+  Scanned()
+  Check("...both ways", Verdict(145) == "disenchant/dust", Verdict(145))
+  -- Auctionator starting a scan moves nothing by itself: its "today" counts
+  -- as seen when its day began (here six hours ago), scan or no scan.
+  Auctionator.Constants = { SCAN_DAY_0 = now - 6 * 3600 - 1000 * 86400 }
+  Fire("QUEST_ACCEPTED", 1, 1)
+  local before = ns.Check(111).price
+  Auctionator.SavedState = { TimeOfLastBrowseScan = os.time() }
+  priceAsked = {}
+  Scanned()
+  Check("a scan Auctionator has just started doesn't make its price from earlier today the newest", before == 19
+    and ns.Check(111).price == 19 and next(priceAsked) == nil, ns.Check(111).price)
+  Auctionator.Constants, Auctionator.SavedState = nil, nil
+  ForeverCompanion = nil
+  C_QuestLog.GetInfo = GetInfo
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("...and all is as before", ns.Check(111).price == 19 and ns.Check(140).price == 14, ns.Check(111).price)
 end
 
 -- Bags full: the stacks you'd lose least by deleting flash
@@ -1541,7 +1722,7 @@ do
   Check("the case reported: Ankhs are marked to auction", Verdict(17030) == "auction/costly" and Mark(ankh) == GAVEL, Verdict(17030))
   local CLASS = "SHAMAN"
   function UnitClass(unit) return unit == "player" and "Schamane" or nil, unit == "player" and CLASS or nil end
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
   Check("your own class's reagents are kept, whatever they are worth", Verdict(17030) == "keep/reagent" and Mark(ankh) == TICK
     and Shows(17030, TICK), Verdict(17030))
   Check("another class's are priced like anything else", Verdict(17020) == "auction/costly" and Verdict(5140) == "auction/costly"
@@ -1562,18 +1743,18 @@ do
   SlashCmdList.SMOOTHBRAIN("reagents on")
   Check("/smooth reagents on", SmoothBrainDB.reagents == true and Verdict(17030) == "keep/reagent" and Mark(ankh) == TICK)
   CLASS = "MAGE"
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
   Check("a mage keeps Arcane Powder, and prices Ankhs", Verdict(17020) == "keep/reagent" and Verdict(17030) == "auction/costly")
   CLASS = "ROGUE"
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
   Check("a rogue keeps powders and poisons", Verdict(5140) == "keep/reagent" and Verdict(6947) == "keep/reagent"
     and Verdict(17020) == "auction/costly")
   CLASS = "WARRIOR"
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
   Check("a class that casts with nothing keeps none of them for that", Verdict(17030) == "auction/costly" and Verdict(17020) == "auction/costly"
     and Verdict(5140) == "auction/costly" and Verdict(6947) == "keep/costly")
   CLASS = nil
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
   Check("while the game doesn't say what you are, nothing is kept as a reagent", Verdict(17030) == "auction/costly")
   printed = {}
   SlashCmdList.SMOOTHBRAIN("help")
@@ -1584,7 +1765,7 @@ do
   for offset = 3, 0, -1 do BAGS[0][first + offset] = nil end
   Fire("BAG_UPDATE", 0)
   Fire("BAG_UPDATE_DELAYED")
-  Fire("SKILL_LINES_CHANGED")
+  Fire("QUEST_ACCEPTED", 1, 1)
 end
 
 -- Soulbound things with a Use of their own are kept. The case reported from
@@ -1632,6 +1813,40 @@ do
   for offset = 4, 0, -1 do BAGS[0][first + offset] = nil end
   Fire("BAG_UPDATE", 0)
   Fire("BAG_UPDATE_DELAYED")
+end
+
+-- Food and potions the game also marks as crafting reagents are priced like
+-- trade goods. The case reported from the game: Raw Winter Squid, food to the
+-- game and a cooking ingredient, 7c from a vendor and 5s 95c at auction,
+-- marked "keep it".
+do
+  ITEMS[194] = { 7, 0, 1, 0, 0, nil, true }   -- Raw Winter Squid: food, and a crafting reagent
+  ITEMS[195] = { 7, 0, 1, 0 }                 -- food at the same prices that is nothing else
+  USES[194], USES[195] = 433, 433
+  PRICES.dbminbuyout[194], PRICES.dbnumauctions[194] = 595, 169
+  PRICES.dbminbuyout[195], PRICES.dbnumauctions[195] = 595, 169
+  local first = #BAGS[0] + 1
+  BAGS[0][first], BAGS[0][first + 1] = { 194, 1 }, { 195, 1 }
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  Check("food that is also a crafting reagent is priced like a trade good: auction it", Verdict(194) == "auction/costly"
+    and ns.Check(194).price == 595, Verdict(194))
+  Check("...and its tooltip line says so", Tip(194):find("Auction it", 1, true) ~= nil, Tip(194))
+  Check("...other food as dear to buy back is still kept", Verdict(195) == "keep/costly", Verdict(195))
+  PRICES.dbminbuyout[194] = 9
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("...and when it costs little more to buy back, it is one to vendor, as it was", Verdict(194) == "vendor/cheap", Verdict(194))
+  BOUND[194] = true
+  Fire("BAG_UPDATE", 0)
+  Fire("QUEST_ACCEPTED", 1, 1)
+  Check("soulbound, it still has a Use of its own, and is kept", Verdict(194) == "keep/use", Verdict(194))
+  BOUND[194], ITEMS[194], ITEMS[195], USES[194], USES[195] = nil, nil, nil, nil, nil
+  PRICES.dbminbuyout[194], PRICES.dbnumauctions[194], PRICES.dbminbuyout[195], PRICES.dbnumauctions[195] = nil, nil, nil, nil
+  BAGS[0][first + 1] = nil
+  BAGS[0][first] = nil
+  Fire("BAG_UPDATE", 0)
+  Fire("BAG_UPDATE_DELAYED")
+  Fire("QUEST_ACCEPTED", 1, 1)
 end
 
 -- The quest log itself: an item one of your quests asks for is kept, whatever else is known about it

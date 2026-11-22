@@ -2,6 +2,11 @@
 
 For World of Warcraft: Forever.
 
+## New in 2.9
+
+- **Raw fish is no longer "keep it".** Food and potions that are crafting reagents are priced like trade goods: Raw Winter Squid is "auction it".
+- **Much lighter on your game.** A skill going up no longer has every item judged again, the auction house only has the items with a new price judged again, and a bag change only has that bag read again.
+
 ## New in 2.8
 
 - **Soulbound things you use are kept.** A soulbound item with a Use of its own that you don't wear, such as the Cozy Sleeping Bag or a mount, used to be marked "vendor it". It now gets the green tick.
@@ -16,7 +21,7 @@ For World of Warcraft: Forever.
 | Gold coin | **Vendor it** | It costs little more to buy again than a vendor pays. |
 | Gavel | **Auction it** | It is worth clearly more than a vendor pays. |
 | Disenchant icon | **Disenchant it** | Green or better gear worth more as enchanting materials. |
-| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, soulbound things you use (a sleeping bag, a mount), things a vendor won't buy, gear in your equipment sets, and your class's reagents. |
+| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, unless they are crafting reagents (raw fish); soulbound things you use (a sleeping bag, a mount), things a vendor won't buy, gear in your equipment sets, and your class's reagents. |
 | Yellow ! | **Keep it for its quest** | A quest still needs it. |
 | Red cross | **Safe to delete** | A quest item whose quests are all done, that vendors don't buy. |
 | Padlock | **Keep it (you locked it)** | An item you locked yourself. It is kept whatever it is worth. |
