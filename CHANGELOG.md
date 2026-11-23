@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.9.1
+
+- Text that depends on the clock stays right: "Auctionator saw it today"
+  after midnight, and a price Forever Companion saw "within the hour" once
+  the hour is up. Since 2.9 such text could linger until the next quest
+  event; now everything is judged afresh when you leave the auction house,
+  an hour after that, and at midnight.
+
 ## 2.9
 
 Lighter on your game, one new rule, and one fix to which price is believed.

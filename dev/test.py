@@ -99,7 +99,8 @@ SlashCmdList, NUM_BAG_SLOTS, NUM_CONTAINER_FRAMES = {}, 4, 13
 NUM_TOTAL_EQUIPPED_BAG_SLOTS = 5   -- the reagent bag comes after the four bags
 ERR_INV_FULL = "Inventory is full."
 local timers = {}
-C_Timer = { After = function(_, fn) timers[#timers + 1] = fn end }
+local delays = {}   -- [timer] = after how many seconds it was asked for
+C_Timer = { After = function(wait, fn) timers[#timers + 1] = fn delays[fn] = wait end }
 local function RunTimers()
   local due = timers
   timers = {}
@@ -1847,6 +1848,46 @@ do
   Fire("BAG_UPDATE", 0)
   Fire("BAG_UPDATE_DELAYED")
   Fire("QUEST_ACCEPTED", 1, 1)
+end
+
+-- What a verdict says can hang on the clock ("Auctionator saw it today", a
+-- price seen "within the hour"). Everything is judged afresh when you leave
+-- the auction house, an hour after that, and at midnight.
+do
+  RunTimers()
+  local asked = priceLookups
+  Fire("AUCTION_HOUSE_CLOSED")
+  local waits = {}
+  for _, fn in ipairs(timers) do waits[#waits + 1] = delays[fn] end
+  table.sort(waits)
+  Check("leaving the auction house asks for two rounds: a moment later, and an hour later", #waits == 2 and waits[1] <= 5
+    and waits[2] >= 3600, table.concat(waits, ","))
+  local first, second = timers[1], timers[2]
+  timers = {}
+  first()
+  Verdict(111)
+  Check("...the first judges everything afresh", priceLookups > asked, priceLookups - asked)
+  Fire("AUCTION_HOUSE_CLOSED")   -- back again within the hour
+  timers = {}
+  asked = priceLookups
+  second()
+  Verdict(111)
+  Check("...the hour's round is dropped once a later visit has its own", priceLookups == asked, priceLookups - asked)
+  -- Midnight: the game's date() says how long until then.
+  date = function() return { hour = 23, min = 59, sec = 0 } end
+  Fire("PLAYER_LOGIN")
+  local midnight
+  for _, fn in ipairs(timers) do
+    if delays[fn] and delays[fn] > 20 then midnight = fn end
+  end
+  Check("at login, a round is set for midnight", midnight ~= nil and delays[midnight] >= 60 and delays[midnight] <= 70,
+    midnight and delays[midnight])
+  timers = {}
+  asked = priceLookups
+  midnight()
+  Verdict(111)
+  Check("...which judges everything afresh, and sets the next", priceLookups > asked and #timers == 1, #timers)
+  date, timers = nil, {}
 end
 
 -- The quest log itself: an item one of your quests asks for is kept, whatever else is known about it

@@ -2132,6 +2132,44 @@ local function PricesSeen()
   end
 end
 
+-- Some of what a verdict says hangs on the clock: "Auctionator saw it today",
+-- a quest item's "seen today or yesterday", and a price Forever Companion
+-- saw "within the hour", which comes with how many are listed. Nothing
+-- else tells when those have moved on, so everything is judged afresh at
+-- these times: when you leave the auction house (once its last results have
+-- settled), an hour after that, and at midnight.
+local clockRound = 0
+local function Afresh()
+  Forget()
+  RefreshIcons()
+end
+
+local function AfterAuctionHouse()
+  if not (C_Timer and C_Timer.After) then
+    return
+  end
+  clockRound = clockRound + 1
+  local round = clockRound
+  C_Timer.After(3, Afresh)
+  C_Timer.After(LIVE_SECONDS + 5, function()
+    if round == clockRound then
+      Afresh()
+    end
+  end)
+end
+
+local function AtMidnight()
+  if not (C_Timer and C_Timer.After and date) then
+    return
+  end
+  local now = date("*t")
+  local left = (24 - now.hour) * 3600 - now.min * 60 - now.sec
+  C_Timer.After(math.max(left, 60) + 5, function()
+    Afresh()
+    AtMidnight()
+  end)
+end
+
 -- A skill went up, or a spell was learned. Of all that, only one thing
 -- matters here: whether you can disenchant. Skills go up all the time while
 -- you play, so nothing is judged again unless that has changed.
@@ -2183,7 +2221,11 @@ for event in pairs(AUCTION_EVENTS) do
 end
 frame:SetScript("OnEvent", function(_, event, name, extra)
   if AUCTION_EVENTS[event] then
-    PricesSeen()
+    if event == "AUCTION_HOUSE_CLOSED" then
+      AfterAuctionHouse()
+    else
+      PricesSeen()
+    end
   elseif event == "GLOBAL_MOUSE_DOWN" then
     -- Any mouse button, anywhere. The middle one, on an item in your bags, locks or unlocks it.
     if name == "MiddleButton" and settings.lockclick then
@@ -2222,12 +2264,10 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
     -- Questie, RestedXP and the price addons finish starting after login: judge afresh once they have.
     if C_Timer and C_Timer.After then
       for _, wait in ipairs({ 6, 20 }) do
-        C_Timer.After(wait, function()
-          Forget()
-          RefreshIcons()
-        end)
+        C_Timer.After(wait, Afresh)
       end
     end
+    AtMidnight()
     -- The first time, show the setup window, once the other addons have settled.
     if not settings.onboarded and ns.Setup then
       if C_Timer and C_Timer.After then

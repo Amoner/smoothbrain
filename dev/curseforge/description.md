@@ -21,7 +21,7 @@ For World of Warcraft: Forever.
 | Gold coin | **Vendor it** | It costs little more to buy again than a vendor pays. |
 | Gavel | **Auction it** | It is worth clearly more than a vendor pays. |
 | Disenchant icon | **Disenchant it** | Green or better gear worth more as enchanting materials. |
-| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, unless they are crafting reagents (raw fish); soulbound things you use (a sleeping bag, a mount), things a vendor won't buy, gear in your equipment sets, and your class's reagents. |
+| Green tick | **Keep it** | Things you use up (potions, food, bandages) that are dear to replace, soulbound things you use (a sleeping bag, a mount), things a vendor won't buy, gear in your equipment sets, and your class's reagents. Raw fish and other crafting reagents are priced, not kept. |
 | Yellow ! | **Keep it for its quest** | A quest still needs it. |
 | Red cross | **Safe to delete** | A quest item whose quests are all done, that vendors don't buy. |
 | Padlock | **Keep it (you locked it)** | An item you locked yourself. It is kept whatever it is worth. |
