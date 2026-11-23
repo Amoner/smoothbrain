@@ -501,7 +501,7 @@ end
 -- Load the addon the way the game does
 ---------------------------------------------------------------------------
 local ns = {}
-for _, file in ipairs({ "Logic.lua", "SmoothBrain.lua", "Setup.lua" }) do
+for _, file in ipairs({ "Logic.lua", "SmoothBrain.lua", "Vendors.lua", "Setup.lua" }) do
   local f = assert(io.open(ADDON_DIR .. file, "rb"))
   local source = f:read("*a")
   f:close()
@@ -1888,6 +1888,117 @@ do
   Verdict(111)
   Check("...which judges everything afresh, and sets the next", priceLookups > asked and #timers == 1, #timers)
   date, timers = nil, {}
+end
+
+-- The nearest vendor: Questie's vendors in your zone, and where you are on its map.
+-- Elwynn Forest (Questie's zone 12, the game's map 1429), 3470 by 2315 yards; you stand in the middle.
+do
+  local db, player = questieModules.QuestieDB, questieModules.QuestiePlayer
+  local NPCS = {
+    [1] = { name = "Near Vendor", subName = "General Goods", npcFlags = 130, spawns = { [12] = { { 50, 40 } } } },
+    [2] = { name = "Far Vendor", npcFlags = 128, spawns = { [12] = { { 80, 50 }, { -1, -1 } } } },
+    [3] = { name = "Horde Vendor", npcFlags = 128, friendlyToFaction = "H", spawns = { [12] = { { 50, 50.1 } } } },
+    [4] = { name = "Quest Giver", npcFlags = 2, spawns = { [12] = { { 50, 50 } } } },
+    [5] = { name = "[DND] Vendor", npcFlags = 128, spawns = { [12] = { { 50, 50 } } } },
+    [6] = { name = "Westfall Vendor", npcFlags = 128, spawns = { [40] = { { 50, 50 } } } },
+  }
+  db.npcFlags = { VENDOR = 128 }
+  db.NPCPointers = {}
+  for id = 1, 2000 do db.NPCPointers[id] = true end   -- most of them nobody in particular
+  local queried = 0
+  db.QueryNPCSingle = function(id, key)
+    queried = queried + 1
+    local npc = NPCS[id]
+    if key == "npcFlags" then return npc and npc.npcFlags or 0 end
+    return npc and npc[key]
+  end
+  db.IsFriendlyToPlayer = function(side) return side == nil or side == "A" or side == "AH" end
+  local zone, px, py = 12, 0.5, 0.5
+  player.GetCurrentZoneId = function() return zone end
+  questieModules.ZoneDB = { GetUiMapIdByAreaId = function(_, area) return ({ [12] = 1429, [40] = 1436, [99] = 1999 })[area] end }
+  C_Map = {
+    GetPlayerMapPosition = function(map, unit)
+      if px == nil then return nil end
+      return { GetXY = function() return px, py end }
+    end,
+    GetMapWorldSize = function(map) return 3470, 2315 end,
+  }
+  local function Vendor()
+    printed = {}
+    SlashCmdList.SMOOTHBRAIN("vendor")
+    return printed[1] or ""
+  end
+  Check("the vendors are read from Questie a little at a time, not all at once", Vendor():find("still reading", 1, true) ~= nil
+    and queried < 2000, Vendor())
+  RunTimers()
+  RunTimers()
+  RunTimers()
+  local line = Vendor()
+  Check("then the nearest one in your zone is named, with how far and which way",
+    line:find("nearest vendor: Near Vendor <General Goods>, 232 yd N (50.0, 40.0).", 1, true) ~= nil, line)
+  results[#results + 1] = "INFO  /smooth vendor:\n        " .. line
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("")
+  local list = table.concat(printed, "\n")
+  Check("/smooth names it under the things to vendor", list:find("Vendoring the", 1, true) ~= nil
+    and list:find("  Nearest vendor: Near Vendor", 1, true) ~= nil, printed[#printed])
+  px, py = 0.799, 0.5
+  line = Vendor()
+  Check("the other faction's vendors, quest givers and [DND] ones are not counted; standing by one, it is \"right here\"",
+    line:find("Far Vendor, right here", 1, true) ~= nil, line)
+  px, py = 0.5, 0.5
+  zone = 99
+  Check("a zone with no vendor Questie knows of says so", Vendor():find("none in this zone", 1, true) ~= nil, Vendor())
+  zone, px = 12, nil
+  Check("where the game won't say where you are, it says so", Vendor():find("won't say where you are", 1, true) ~= nil, Vendor())
+  px = 0.5
+  C_Map.GetPlayerMapPosition = function() error("secret") end
+  Check("a position the game keeps from addons causes no error", Vendor():find("won't say where you are", 1, true) ~= nil, Vendor())
+  C_Map.GetPlayerMapPosition = function() return { GetXY = function() return px, py end } end
+
+  -- The arrow: it points at that vendor, turned by which way you face.
+  function Widget:SetRotation(angle) self.rotation = angle end
+  local facing = 0   -- north
+  GetPlayerFacing = function() return facing end
+  ns.LookForVendor()
+  local arrow = SmoothBrainVendorArrow
+  Check("while you carry something to vendor, the arrow shows, with the distance", arrow ~= nil and arrow:IsShown()
+    and arrow.distance.text == "232 yd", arrow and arrow.distance.text)
+  Check("...facing north, it points straight ahead at a vendor to the north", math.abs(arrow.icon.rotation) < 1e-6,
+    arrow.icon.rotation)
+  facing = math.pi / 2   -- west: the vendor is now to your right
+  arrow.scripts.OnUpdate(arrow, 0.02)
+  Check("...turn to face west and it turns a quarter to the right", math.abs(arrow.icon.rotation + math.pi / 2) < 1e-6,
+    arrow.icon.rotation)
+  GetPlayerFacing = function() error("secret") end
+  arrow.scripts.OnUpdate(arrow, 0.02)
+  Check("where the game won't say which way you face, north is up, like the map", math.abs(arrow.icon.rotation) < 1e-6
+    and arrow.northUp == true, arrow.icon.rotation)
+  GetPlayerFacing = nil
+  arrow.GetPoint = function() return "TOPLEFT", UIParent, "TOPLEFT", 120, -80 end
+  arrow.scripts.OnDragStop(arrow)
+  local at = SmoothBrainDB.arrowAt
+  Check("dragged somewhere, it stays there", at[1] == "TOPLEFT" and at[2] == "TOPLEFT" and at[3] == 120 and at[4] == -80)
+  SlashCmdList.SMOOTHBRAIN("arrow reset")
+  Check("/smooth arrow reset puts it back", next(SmoothBrainDB.arrowAt) == nil)
+  zone = 99
+  ns.LookForVendor()
+  Check("with no vendor in the zone it hides", not arrow:IsShown())
+  zone = 12
+  ns.LookForVendor()
+  Check("...and comes back with one", arrow:IsShown())
+  SlashCmdList.SMOOTHBRAIN("arrow off")
+  ns.LookForVendor()
+  Check("/smooth arrow off hides it", not arrow:IsShown() and SmoothBrainDB.arrow == false)
+  SlashCmdList.SMOOTHBRAIN("arrow on")
+
+  Questie.started = false
+  Check("without Questie ready, /smooth vendor says what it needs", Vendor():find("needs Questie", 1, true) ~= nil, Vendor())
+  printed = {}
+  SlashCmdList.SMOOTHBRAIN("")
+  Check("...and /smooth leaves the line out", not table.concat(printed, "\n"):find("Nearest vendor", 1, true))
+  Questie.started = true
+  Fire("QUEST_ACCEPTED", 1, 1)
 end
 
 -- The quest log itself: an item one of your quests asks for is kept, whatever else is known about it

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.10
+
+- **New: an arrow to the nearest vendor.** While you carry something marked
+  "vendor it", a small gold arrow points at the nearest vendor in your zone,
+  turning as you turn, with the distance under it. Drag it wherever you like,
+  next to your bags for instance. Hover it for the vendor's name and map
+  coordinates. `/smooth arrow off` hides it, `/smooth arrow reset` puts it
+  back where it started.
+- `/smooth` now ends with the nearest vendor when there is something to
+  vendor ("Nearest vendor: Brother Danil <General Supplies>, 232 yd N"), and
+  `/smooth vendor` says it at any time.
+- Both need Questie, which knows where every vendor stands. Vendors of the
+  other faction are left out. The distance is a straight line within your
+  zone.
+
 ## 2.9.1
 
 - Text that depends on the clock stays right: "Auctionator saw it today"

@@ -304,6 +304,8 @@ gets the padlock.
     /smooth ignore [item]   never judge this item; again to undo; alone, lists them
     /smooth drop            flash and list the stacks you'd lose least by deleting
     /smooth flash on|off    do that by itself when your bags are full
+    /smooth vendor          the nearest vendor in your zone, how far and which way (needs Questie)
+    /smooth arrow on|off|reset  while you carry something to vendor, an arrow to the nearest vendor; drag it anywhere
     /smooth icons on|off    the markers on bag slots
     /smooth tooltip short|full|off  the tooltip: one line, or always with the reason in full
 

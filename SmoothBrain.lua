@@ -30,6 +30,8 @@ local DEFAULTS = {
   sets = true,     -- keep gear that is in one of your equipment sets, whatever it is worth (/smooth sets)
   reagents = true, -- keep what your class casts with, whatever it is worth (/smooth reagents)
   companion = true, -- take Forever Companion's price when it saw the item on the auction house last (/smooth companion)
+  arrow = true,    -- while you carry something to vendor, an arrow to the nearest vendor (Vendors.lua; /smooth arrow)
+  arrowAt = {},    -- where you dragged the arrow: { point, relative point, x, y }; empty for its first place
 }
 local settings = DEFAULTS
 
@@ -248,6 +250,7 @@ local function Questie()
   questieFound = { db, okPlayer and type(player) == "table" and player or nil }
   return questieFound[1], questieFound[2]
 end
+ns.Questie = Questie   -- for the nearest vendor (Vendors.lua)
 
 -- Whether a quest in your log has all its objectives met and only waits to be handed in.
 local function QuestReady(questID)
@@ -1731,6 +1734,10 @@ local function List(everything)
   end
   if selling > 0 then
     print(("  Vendoring the %d marked \"vendor it\" pays %s."):format(selling, ns.Money(gain)))
+    local nearest = ns.VendorLine and ns.VendorLine()
+    if nearest then
+      print("  " .. nearest)
+    end
   end
   if not everything and others > 0 then
     print(("  /smooth all also lists the %d to auction, disenchant or keep."):format(others))
@@ -1924,6 +1931,20 @@ SlashCmdList.SMOOTHBRAIN = function(message)
       local _, link = GetItemInfo(stack.itemID)
       print(("  %s x%d, worth %s"):format(link or ("item " .. stack.itemID), stack.count, ns.Money(stack.value)))
     end
+  elseif command == "vendor" then
+    local nearest = ns.VendorLine and ns.VendorLine()
+    Say(nearest and (nearest:sub(1, 1):lower() .. nearest:sub(2))
+      or "finding the nearest vendor needs Questie, which knows where every vendor stands.")
+  elseif command == "arrow" then
+    if rest:lower() == "reset" then
+      settings.arrowAt = {}
+      if ns.PlaceArrow then
+        ns.PlaceArrow()
+      end
+      Say("the arrow to the nearest vendor is back in its first place.")
+    else
+      Toggle("arrow", "The arrow to the nearest vendor, while you carry something to vendor", rest)
+    end
   elseif command == "flash" then
     Toggle("flash", "Flashing the cheapest stacks when your bags are full", rest)
   elseif command == "icons" then
@@ -1964,6 +1985,9 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     print("  /smooth flash on|off - when a pickup fails because your bags are full, flash the "
       .. DROP_COUNT .. " stacks you'd lose least by deleting")
     print("  /smooth drop - flash them now, and list them")
+    print("  /smooth vendor - the nearest vendor in your zone, how far and which way (needs Questie)")
+    print("  /smooth arrow on|off|reset - while you carry something to vendor, an arrow to the nearest vendor; drag it "
+      .. "where you like, reset puts it back; now " .. (settings.arrow and "on" or "off"))
     print("  /smooth tooltip short|full|off - the tooltip: one line (hold Shift for the reason in full), or always in full; now "
       .. (not settings.tooltip and "off" or settings.explain and "full" or "short"))
   end
@@ -2255,6 +2279,7 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
     HookAuctionator()
   elseif event == "PLAYER_LOGIN" then
     loggedIn = true
+    ns.loggedIn = true
     HookBagnon()
     HookBaganator()
     HookBetterBags()
@@ -2266,6 +2291,12 @@ frame:SetScript("OnEvent", function(_, event, name, extra)
       for _, wait in ipairs({ 6, 20 }) do
         C_Timer.After(wait, Afresh)
       end
+      -- The list of vendors, read from Questie a little at a time once it has started.
+      C_Timer.After(30, function()
+        if ns.BuildVendors then
+          ns.BuildVendors()
+        end
+      end)
     end
     AtMidnight()
     -- The first time, show the setup window, once the other addons have settled.

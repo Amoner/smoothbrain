@@ -2,17 +2,14 @@
 
 For World of Warcraft: Forever.
 
+## New in 2.10
+
+- **An arrow to the nearest vendor.** While you carry something to vendor, a small gold arrow points at the nearest vendor in your zone, turning as you turn, with the distance under it. Drag it next to your bags. `/smooth vendor` names the vendor in chat. Needs Questie.
+
 ## New in 2.9
 
 - **Raw fish is no longer "keep it".** Food and potions that are crafting reagents are priced like trade goods: Raw Winter Squid is "auction it".
 - **Much lighter on your game.** A skill going up no longer has every item judged again, the auction house only has the items with a new price judged again, and a bag change only has that bag read again.
-
-## New in 2.8
-
-- **Soulbound things you use are kept.** A soulbound item with a Use of its own that you don't wear, such as the Cozy Sleeping Bag or a mount, used to be marked "vendor it". It now gets the green tick.
-- **The newest auction price wins.** With more than one price addon, each item's price comes from whichever saw it for sale last, not from TradeSkillMaster first.
-- **Forever Companion is a price source.** It notes prices as the auction house shows them, so the tooltip matches what is listed now.
-- **The tooltip is one line.** Hold Shift for the reason in full.
 
 ## The seven markers
 
@@ -53,7 +50,7 @@ If the difference is within your limit (5 silver unless you change it), the item
 ## What it reads
 
 - **Prices:** TradeSkillMaster (with the TSM desktop app), Auctionator (your own scans), Forever Companion (what the auction house showed you), or all of them: for each item, the price of whichever saw it for sale last is used, so the tooltip matches what is listed now. Without any of them, it still marks quest items, gray junk and soulbound items, but can't judge anything else.
-- **Quests:** your quest log, first of all: anything a quest in it asks for is kept. RestedXP Guides, for items a later quest needs. Questie, for which quest items are leftovers. The game's own quest flags.
+- **Quests:** your quest log, first of all: anything a quest in it asks for is kept. RestedXP Guides, for items a later quest needs. Questie, for which quest items are leftovers, and where the vendors stand. The game's own quest flags.
 - **Bags:** Bagnon, Baganator, BetterBags, EllesmereUI and the game's own bags.
 
 All of these are optional. Smooth Brain uses whichever you have.
@@ -79,6 +76,8 @@ A setup window opens the first time, and with `/smooth setup`. It checks your pr
     /smooth ignore [item]   never judge this item; again to undo
     /smooth drop            flash and list the stacks you'd lose least by deleting
     /smooth flash on|off    do that by itself when your bags are full
+    /smooth vendor          the nearest vendor in your zone, how far and which way
+    /smooth arrow on|off    the arrow to the nearest vendor (reset puts it back)
     /smooth icons on|off    the markers on bag slots
     /smooth tooltip short|full|off  the tooltip: one line, or the reason in full
 
