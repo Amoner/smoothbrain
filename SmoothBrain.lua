@@ -20,6 +20,7 @@ local DEFAULTS = {
   limit = 500,     -- copper: vendor when buying your stack back costs at most this much more than a vendor pays
   tooltip = true,  -- add the verdict to item tooltips: one line
   explain = false, -- ...with the reason in full under it, not only while Shift is held (/smooth tooltip full)
+  pricelines = true, -- auction and disenchant prices under the game's "Sell Price" line (/smooth pricelines)
   icons = true,    -- mark bag slots
   flash = true,    -- when a pickup fails because your bags are full, flash the stacks you'd lose least by deleting
   onboarded = false, -- the setup window (Setup.lua) has been seen
@@ -1102,7 +1103,253 @@ end
 ---------------------------------------------------------------------------
 -- Tooltip
 ---------------------------------------------------------------------------
+
+-- The prices under the game's own "Sell Price" line: what the item fetches at
+-- auction, and what disenchanting it yields, so the three read together. The
+-- game writes that line while it builds the tooltip, before any addon adds to
+-- the end, so lines added then land right under it.
+local priced = {}   -- [tooltip] = true once this showing has its prices; "later" when the item couldn't be told then
+local quotes = {}   -- [itemID] = { at, market }: prices asked for an item you don't carry, kept a few seconds
+local QUOTE_SECONDS = 10
+
+-- The three lines are styled alike: the label gold, each amount in the colour
+-- of its coin (gold, silver, copper) with the coin's icon after it.
+local LABEL = { 1, 0.82, 0 }   -- the gold of the game's headings
+local COIN = {
+  { 10000, "ffd700", "Interface\\MoneyFrame\\UI-GoldIcon", { 1, 0.84, 0 } },
+  { 100, "c7c7cf", "Interface\\MoneyFrame\\UI-SilverIcon", { 0.78, 0.78, 0.81 } },
+  { 1, "eda55f", "Interface\\MoneyFrame\\UI-CopperIcon", { 0.93, 0.65, 0.37 } },
+}
+local LABEL_CODE = "|cffffd100"   -- LABEL, written into text
+
+-- The lines that lost to the verdict are dimmed, so the one that won stands out.
+local DIM_LABEL, DIM_LABEL_CODE = { 0.5, 0.5, 0.5 }, "|cff808080"
+local DIM_COIN = { { "998100", { 0.6, 0.5, 0 } }, { "77777c", { 0.47, 0.47, 0.49 } }, { "8e6339", { 0.56, 0.39, 0.22 } } }
+local POINTER = "|TInterface\\ChatFrame\\ChatFrameExpandArrow:0|t "   -- in front of the line the verdict went by
+
+local function Coins(copper, dim)
+  copper = math.floor(copper + 0.5)
+  local parts = {}
+  for i, coin in ipairs(COIN) do
+    local count = math.floor(copper / coin[1])
+    copper = copper - count * coin[1]
+    if count > 0 or (i == #COIN and #parts == 0) then
+      parts[#parts + 1] = "|cff" .. (dim and DIM_COIN[i][1] or coin[2]) .. count .. "|r|T" .. coin[3] .. ":0:0:2:0|t"
+    end
+  end
+  return table.concat(parts, " ")
+end
+
+-- The game's own line: its label and its amount live in a small money frame
+-- the game puts beside the line. They are recoloured for this showing, and
+-- given their colours back when the tooltip is cleared (the frame is reused
+-- for other sums, such as a repair bill).
+local recoloured = {}   -- [font string] = { r, g, b } it had
+
+local function Recolour(text, colour)
+  if type(text) ~= "table" or not text.SetTextColor then
+    return
+  end
+  if not recoloured[text] and text.GetTextColor then
+    recoloured[text] = { text:GetTextColor() }
+  end
+  text:SetTextColor(colour[1], colour[2], colour[3])
+end
+
+-- The money frame the game just put beside the tooltip's last line.
+local function MoneyFrameOf(tooltip)
+  local frame = type(tooltip.shownMoneyFrames) == "table" and tooltip.shownMoneyFrames[#tooltip.shownMoneyFrames]
+  if not frame and tooltip.GetName and tooltip.numMoneyFrames then
+    frame = _G[tooltip:GetName() .. "MoneyFrame" .. tooltip.numMoneyFrames]
+  end
+  return type(frame) == "table" and frame or nil
+end
+
+-- Failing a line of our own (SellPriceLine), the game's is recoloured.
+local function StyleSellPrice(tooltip, dim)
+  local frame = MoneyFrameOf(tooltip)
+  local name = frame and frame.GetName and frame:GetName()
+  if not name then
+    return
+  end
+  Recolour(frame.PrefixText or _G[name .. "PrefixText"], dim and DIM_LABEL or LABEL)
+  for i, part in ipairs({ "GoldButton", "SilverButton", "CopperButton" }) do
+    local button = frame[part] or _G[name .. part]
+    local text = type(button) == "table" and (button.Text or _G[name .. part .. "Text"]
+      or (button.GetFontString and button:GetFontString()))
+    Recolour(text, dim and DIM_COIN[i][2] or COIN[i][4])
+  end
+end
+
+local function RestoreColours()
+  for text, colour in pairs(recoloured) do
+    pcall(text.SetTextColor, text, colour[1], colour[2], colour[3])
+    recoloured[text] = nil
+  end
+end
+
+-- What the price addons say of an item: as it was judged, if you carry it;
+-- otherwise asked now (and kept a few seconds: a tooltip is built again and
+-- again while the mouse rests on it).
+local function Quote(itemID)
+  ns.Check(itemID)
+  local known = verdicts[itemID]
+  if known and known.market then
+    return known.market
+  end
+  local _, _, quality, _, _, _, _, _, _, _, _, classID, _, bindType = GetItemInfo(itemID)
+  if not quality then
+    return nil
+  end
+  local now = GetTime and GetTime() or 0
+  local quote = quotes[itemID]
+  if quote and now - quote.at < QUOTE_SECONDS then
+    return quote.market
+  end
+  local gear = quality >= UNCOMMON and (classID == WEAPON or classID == ARMOR)
+  local bound = bindType == BIND_ON_PICKUP or bindType == BIND_QUEST
+  local market = nil
+  if gear or not bound then
+    market = Market(itemID, gear, bound)
+  end
+  quotes[itemID] = { at = now, market = market }
+  return market
+end
+
+-- Which of the three lines a verdict goes by; any other verdict dims none.
+local WINNER = { vendor = "vendor", auction = "auction", disenchant = "disenchant" }
+
+local function Winner(result)
+  return result and WINNER[result.verdict] or nil
+end
+
+-- One price line: the bag slot's marker, the label, the amount; the pointer
+-- when the verdict went by it, dimmed when it went by another.
+local function PriceText(kind, label, copper, winner)
+  local dim = winner ~= nil and winner ~= kind
+  local mark = MARKS[kind]
+  return (winner == kind and POINTER or "") .. (mark and ("|T" .. mark .. ":0|t ") or "")
+    .. (dim and DIM_LABEL_CODE or LABEL_CODE) .. label .. "|r " .. Coins(copper, dim)
+end
+
+local function PriceLine(tooltip, kind, label, copper, winner)
+  tooltip:AddLine(PriceText(kind, label, copper, winner), 1, 1, 1)
+end
+
+-- The game's "Sell Price" line, written like the two under it: its money
+-- frame is hidden and the line it sat on (blank) given the same text ours
+-- have. True when done; the tooltip builds it afresh each time it shows.
+local function SellPriceLine(tooltip, cost, winner)
+  if type(cost) ~= "number" or cost <= 0 or not (tooltip.GetName and tooltip.NumLines) then
+    return false
+  end
+  local frame = MoneyFrameOf(tooltip)
+  local line = _G[tooltip:GetName() .. "TextLeft" .. tooltip:NumLines()]
+  if not (frame and frame.Hide and type(line) == "table" and line.SetText and line.GetText) then
+    return false
+  end
+  local text = line:GetText()
+  if type(text) == "string" and text:match("%S") then
+    return false   -- not the blank line the money sits on: leave it be
+  end
+  line:SetText(PriceText("vendor", "Sell Price:", cost, winner))
+  if line.SetTextColor then
+    line:SetTextColor(1, 1, 1)
+  end
+  frame:Hide()
+  return true
+end
+
+-- `units`: how many the "Sell Price" line is for, so the prices match it.
+-- True when a line was added.
+local function PriceLines(tooltip, itemID, units, winner)
+  local market = Quote(itemID)
+  if not market then
+    return false
+  end
+  local added = false
+  local auction, label = market.ahPrice, "Auction Price:"
+  if not auction and market.regionSale then
+    auction, label = market.regionSale, "Region Sale Price:"
+  end
+  if auction and auction > 0 then
+    PriceLine(tooltip, "auction", label, auction * units, winner)
+    added = true
+  end
+  if market.destroy and market.destroy > 0 then
+    PriceLine(tooltip, "disenchant", "Disenchant:", market.destroy * units, winner)
+    added = true
+  end
+  return added
+end
+
+-- The verdict: one line (the slot's marker, the verdict, and on the right the
+-- prices that decided it), or the reason in full. The reason in full is a
+-- paragraph, and a tooltip has enough to read: it shows while Shift is held,
+-- or always with /smooth tooltip full.
+local function AddVerdict(tooltip, result)
+  if settings.explain or (IsShiftKeyDown ~= nil and IsShiftKeyDown()) then
+    tooltip:AddLine("Smooth Brain: " .. ns.HEADLINE[result.verdict], 1, 0.82, 0)
+    tooltip:AddLine(ns.Explain(result, ns.Money), 0.8, 0.8, 0.8, true)
+    return
+  end
+  local mark = MARKS[result.verdict]
+  local verdict = (mark and ("|T" .. mark .. ":0|t ") or "") .. ns.TITLE[result.verdict]
+  local brief = ns.Brief(result, ns.Money)
+  if brief and tooltip.AddDoubleLine then
+    tooltip:AddDoubleLine(verdict, brief, 1, 0.82, 0, 0.8, 0.8, 0.8)
+  else
+    tooltip:AddLine(verdict .. (brief and ("  |cffcccccc" .. brief .. "|r") or ""), 1, 0.82, 0)
+  end
+end
+
+-- Under the game's "Sell Price" line, one block: the other prices, the
+-- verdict, and a blank line to set it off from what other addons add.
+local function OnSellPrice(tooltip, cost)
+  if priced[tooltip] or not (settings.tooltip and settings.pricelines) then
+    return
+  end
+  if tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip then
+    return
+  end
+  if tooltip.IsForbidden and tooltip:IsForbidden() then
+    return
+  end
+  local ok, _, link = pcall(tooltip.GetItem, tooltip)
+  local itemID = ok and type(link) == "string" and tonumber(link:match("item:(%d+)"))
+  if not itemID then
+    priced[tooltip] = "later"   -- the end of the tooltip will do
+    return
+  end
+  priced[tooltip] = true
+  local _, result = pcall(ns.Check, itemID)
+  result = type(result) == "table" and result or nil
+  local winner = Winner(result)
+  local ok, own = pcall(SellPriceLine, tooltip, cost, winner)
+  if not (ok and own) then
+    pcall(StyleSellPrice, tooltip, winner ~= nil and winner ~= "vendor")
+  end
+  local _, added = pcall(function()
+    -- The game gives a stack's price or one item's; say the same of the others.
+    local sell = select(11, GetItemInfo(itemID))
+    local units = 1
+    if type(cost) == "number" and type(sell) == "number" and sell > 0 and cost >= sell and cost % sell == 0 then
+      units = cost / sell
+    end
+    return PriceLines(tooltip, itemID, units, winner)
+  end)
+  if result and pcall(AddVerdict, tooltip, result) then
+    priced[tooltip] = "verdict"   -- said here, so not again at the end
+    added = true
+  end
+  if added == true then
+    tooltip:AddLine(" ")
+  end
+end
+
 local function OnTooltip(tooltip, data)
+  local pricing = priced[tooltip]
+  priced[tooltip] = nil
   if not settings.tooltip or (tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip) then
     return
   end
@@ -1114,26 +1361,15 @@ local function OnTooltip(tooltip, data)
     local _, link = tooltip:GetItem()
     itemID = type(link) == "string" and tonumber(link:match("item:(%d+)"))
   end
+  if pricing == "verdict" then
+    return   -- already said, under the Sell Price line
+  end
   local result = itemID and ns.Check(itemID)
-  if not result then
-    return
+  if pricing == "later" and itemID and settings.pricelines then
+    pcall(PriceLines, tooltip, itemID, 1, Winner(result))
   end
-  -- The reason in full is a paragraph, and a tooltip has enough to read: it
-  -- shows while Shift is held, or always with /smooth tooltip full.
-  if settings.explain or (IsShiftKeyDown ~= nil and IsShiftKeyDown()) then
-    tooltip:AddLine("Smooth Brain: " .. ns.HEADLINE[result.verdict], 1, 0.82, 0)
-    tooltip:AddLine(ns.Explain(result, ns.Money), 0.8, 0.8, 0.8, true)
-    return
-  end
-  -- Otherwise one line: the slot's marker, the verdict, and on the right the
-  -- prices that decided it.
-  local mark = MARKS[result.verdict]
-  local verdict = (mark and ("|T" .. mark .. ":0|t ") or "") .. ns.TITLE[result.verdict]
-  local brief = ns.Brief(result, ns.Money)
-  if brief and tooltip.AddDoubleLine then
-    tooltip:AddDoubleLine(verdict, brief, 1, 0.82, 0, 0.8, 0.8, 0.8)
-  else
-    tooltip:AddLine(verdict .. (brief and ("  |cffcccccc" .. brief .. "|r") or ""), 1, 0.82, 0)
+  if result then
+    AddVerdict(tooltip, result)
   end
 end
 
@@ -1141,6 +1377,35 @@ if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and
   TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, OnTooltip)
 elseif GameTooltip and GameTooltip.HookScript then
   GameTooltip:HookScript("OnTooltipSetItem", OnTooltip)
+end
+
+-- The "Sell Price" line: newer clients write it with GameTooltip_OnTooltipAddMoney
+-- (looked up when called), older ones through the tooltip's OnTooltipAddMoney
+-- script (bound when the game loaded). Both are watched; `priced` keeps it to once.
+if type(GameTooltip_OnTooltipAddMoney) == "function" and hooksecurefunc then
+  pcall(hooksecurefunc, "GameTooltip_OnTooltipAddMoney", OnSellPrice)
+end
+for _, tooltip in ipairs({ GameTooltip, ItemRefTooltip }) do
+  -- A script the client doesn't have is an error to hook, and an error here
+  -- would stop the rest of this file loading (/smooth with it): ask first.
+  if type(tooltip) == "table" and tooltip.HookScript then
+    local function Has(script)
+      if not tooltip.HasScript then
+        return false
+      end
+      local ok, has = pcall(tooltip.HasScript, tooltip, script)
+      return ok and has
+    end
+    if Has("OnTooltipAddMoney") then
+      pcall(tooltip.HookScript, tooltip, "OnTooltipAddMoney", OnSellPrice)
+    end
+    if Has("OnTooltipCleared") then
+      pcall(tooltip.HookScript, tooltip, "OnTooltipCleared", function(self)
+        priced[self] = nil
+        RestoreColours()
+      end)
+    end
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -1949,6 +2214,8 @@ SlashCmdList.SMOOTHBRAIN = function(message)
     Toggle("flash", "Flashing the cheapest stacks when your bags are full", rest)
   elseif command == "icons" then
     Toggle("icons", "Markers on bag slots", rest)
+  elseif command == "pricelines" then
+    Toggle("pricelines", "Auction and disenchant prices under the Sell Price line", rest)
   elseif command == "tooltip" then
     local choice = rest:lower()
     if choice == "short" or choice == "full" then
@@ -1990,6 +2257,8 @@ SlashCmdList.SMOOTHBRAIN = function(message)
       .. "where you like, reset puts it back; now " .. (settings.arrow and "on" or "off"))
     print("  /smooth tooltip short|full|off - the tooltip: one line (hold Shift for the reason in full), or always in full; now "
       .. (not settings.tooltip and "off" or settings.explain and "full" or "short"))
+    print("  /smooth pricelines on|off - auction and disenchant prices under the game's Sell Price line; now "
+      .. (settings.pricelines and "on" or "off"))
   end
 end
 

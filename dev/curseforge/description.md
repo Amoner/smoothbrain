@@ -2,14 +2,13 @@
 
 For World of Warcraft: Forever.
 
+## New in 2.11
+
+- **All three prices and the verdict in one block.** Sell Price, Auction Price and Disenchant sit together where the game shows the sell price, each with its bag-slot marker, followed by the verdict. The price the verdict went by gets a pointer and the others are dimmed, so the answer is easy to find in a crowded tooltip. `/smooth pricelines off` turns it off.
+
 ## New in 2.10
 
 - **An arrow to the nearest vendor.** While you carry something to vendor, a small gold arrow points at the nearest vendor in your zone, turning as you turn, with the distance under it. Drag it next to your bags. `/smooth vendor` names the vendor in chat. Needs Questie.
-
-## New in 2.9
-
-- **Raw fish is no longer "keep it".** Food and potions that are crafting reagents are priced like trade goods: Raw Winter Squid is "auction it".
-- **Much lighter on your game.** A skill going up no longer has every item judged again, the auction house only has the items with a new price judged again, and a bag change only has that bag read again.
 
 ## The seven markers
 
@@ -45,7 +44,7 @@ Vendoring an item costs you the difference between what a vendor pays and what t
 
     difference = (cheapest price to buy it - vendor price) x how many you carry
 
-If the difference is within your limit (5 silver unless you change it), the item is **vendor it**. Otherwise it is auction, keep, or keep for its quest. Hover any item and one tooltip line shows the verdict and the two prices; hold Shift for the reason in full.
+If the difference is within your limit (5 silver unless you change it), the item is **vendor it**. Otherwise it is auction, keep, or keep for its quest. Hover any item and the verdict sits with its prices under the game's Sell Price line; hold Shift for the reason in full.
 
 ## What it reads
 
@@ -80,6 +79,7 @@ A setup window opens the first time, and with `/smooth setup`. It checks your pr
     /smooth arrow on|off    the arrow to the nearest vendor (reset puts it back)
     /smooth icons on|off    the markers on bag slots
     /smooth tooltip short|full|off  the tooltip: one line, or the reason in full
+    /smooth pricelines on|off  the price block under Sell Price
 
 ## Limits
 

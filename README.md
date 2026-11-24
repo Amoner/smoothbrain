@@ -37,10 +37,18 @@ Everything in it can also be set with the commands below.
 
 ## What you see
 
-A marker in the bottom left of the bag slot, and one line on the tooltip: the
-same marker, the verdict, and the prices that decided it.
+A marker in the bottom left of the bag slot, and on the tooltip, where the game
+shows the sell price, one block: the three prices, each with its marker, and
+the verdict under them. The price the verdict went by gets a pointer; the
+others are dimmed.
 
+    [coin]  Sell Price: 4s 61c                  (dimmed)
+    > [gavel] Auction Price: 5s 60c
+    [dust]  Disenchant: 3s 10c                  (dimmed; gear only)
     [gavel] Auction it          auction 5s 60c, vendor 4s 61c
+
+`/smooth pricelines off` leaves the game's Sell Price line alone and puts the
+verdict line at the bottom of the tooltip instead.
 
 Hold Shift over an item for the reason in full, which is what "the tooltip
 says" means in the rest of this page. `/smooth tooltip full` shows it always.
@@ -308,6 +316,7 @@ gets the padlock.
     /smooth arrow on|off|reset  while you carry something to vendor, an arrow to the nearest vendor; drag it anywhere
     /smooth icons on|off    the markers on bag slots
     /smooth tooltip short|full|off  the tooltip: one line, or always with the reason in full
+    /smooth pricelines on|off  auction and disenchant prices under the game's Sell Price line
 
 ## Limits
 

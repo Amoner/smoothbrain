@@ -114,12 +114,39 @@ GameTooltip = { lines = {}, AddLine = function(self, text) self.lines[#self.line
   AddDoubleLine = function(self, left, right) self.lines[#self.lines + 1] = left .. "  >>  " .. right end,
   IsShown = function(self) return self.hovered ~= nil end,
   GetItem = function(self) return "x", self.hovered and ("|cffffffff|Hitem:" .. self.hovered .. ":::|h[x]|h|r") or nil end,
-  GetOwner = function(self) return self.owner end }
+  GetOwner = function(self) return self.owner end,
+  -- Like the live client: no OnTooltipAddMoney script, and hooking one it lacks is an error.
+  HasScript = function(_, script) return script == "OnTooltipCleared" end,
+  HookScript = function(self, script, fn)
+    if script ~= "OnTooltipCleared" then error(self:GetName() .. " doesn't have a \"" .. script .. "\" script") end
+    self.cleared = fn
+  end,
+  GetName = function() return "GameTooltip" end }
 local function Hover(itemID, mouseElsewhere)
   GameTooltip.hovered = itemID
   GameTooltip.owner = itemID and { IsMouseOver = function() return not mouseElsewhere end } or nil
 end
 ItemRefTooltip = {}
+-- The game's "Sell Price" line: a money frame with a label and three coin buttons, white.
+local function Text()
+  return { colour = { 1, 1, 1 }, SetTextColor = function(self, r, g, b) self.colour = { r, g, b } end,
+    GetTextColor = function(self) return self.colour[1], self.colour[2], self.colour[3] end }
+end
+local moneyFrame = { GetName = function() return "GameTooltipMoneyFrame1" end, PrefixText = Text(),
+  GoldButton = { Text = Text() }, SilverButton = { Text = Text() }, CopperButton = { Text = Text() },
+  Hide = function(self) self.hidden = true end }
+-- Like the game: a blank line, with the money frame shown over it. Each line's
+-- left text is GameTooltipTextLeft<n>.
+local ownLine = true   -- false: a tooltip whose lines can't be reached, as an older game's might be
+function GameTooltip_OnTooltipAddMoney(tooltip)
+  tooltip:AddLine(" ")
+  local n = #tooltip.lines
+  _G["GameTooltipTextLeft" .. n] = ownLine and { GetText = function() return tooltip.lines[n] end,
+    SetText = function(_, text) tooltip.lines[n] = text end, SetTextColor = function() end } or nil
+  moneyFrame.hidden = false
+  tooltip.shownMoneyFrames = { moneyFrame }
+end
+GameTooltip.NumLines = function(self) return #self.lines end
 local SHIFT = false
 function IsShiftKeyDown() return SHIFT end
 
@@ -783,6 +810,86 @@ do
 end
 tooltipHook({ AddLine = function() error("another tooltip was written to") end }, { id = 100 })
 Check("other tooltips are left alone", true)
+
+-- Under the game's "Sell Price" line: what lands there while the game builds
+-- the tooltip (the lines, as written and plainly), and the whole tooltip after.
+-- Plainly: colours dropped, a coin's icon as its letter, our marks as words.
+local function Plain(text)
+  return (text:gsub("|T[^|]*ChatFrameExpandArrow:0|t ", "> ")
+    :gsub("|T[^|]*SmoothBrain.auction:0|t", "[gavel]")
+    :gsub("|T136244:0|t", "[dust]")
+    :gsub("|T[^|]*UI%-(%a)%a*Icon[^|]*|t", function(coin) return coin:lower() end)
+    :gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+local function Sold(id, cost, unknown)
+  Hover(not unknown and id or nil)
+  GameTooltip.lines = {}
+  GameTooltip_OnTooltipAddMoney(GameTooltip, cost)
+  local raw, under = {}, {}
+  for i, line in ipairs(GameTooltip.lines) do raw[i], under[i] = line, Plain(line) end
+  tooltipHook(GameTooltip, { id = id })
+  local all = {}
+  for i, line in ipairs(GameTooltip.lines) do all[i] = Plain(line) end
+  Hover(nil)
+  return under, all, raw
+end
+local function Lines(lines) return table.concat(lines, " | ") end
+do
+  local under, all, raw = Sold(112, 400)   -- to auction
+  Check("the game's own line, written like ours: the coin, the label, the amount; dimmed, as it lost",
+    under[1] == "g Sell Price: 4s" and raw[1]:find("|cff808080Sell Price:|r |cff77777c4|r", 1, true) ~= nil
+    and moneyFrame.hidden == true, raw[1])
+  Check("the verdict's line: the pointer, the gavel, the label gold, each amount in its coin's colour",
+    raw[2]:find("^|T[^|]*ChatFrameExpandArrow:0|t |T[^|]*SmoothBrain.auction:0|t |cffffd100Auction Price:|r ") ~= nil
+    and raw[2]:find("|cffffd7001|r|T[^|]*UI%-GoldIcon") ~= nil, raw[2])
+  Check("one block: the three prices, the verdict, a blank line; nothing more at the end", under[2] == "> [gavel] Auction Price: 1g"
+    and under[3]:find("^%[gavel%] Auction it  >>  auction 1g, vendor 4s") ~= nil and under[4] == " " and #under == 4 and #all == 4,
+    Lines(all))
+  under, all, raw = Sold(111, 160)   -- to vendor
+  Check("vendor it: the pointer on the Sell Price line, the auction price dimmed", under[1] == "> g Sell Price: 1s 60c"
+    and raw[1]:find("|cffffd100Sell Price:|r |cffc7c7cf1|r", 1, true) ~= nil
+    and under[2] == "[gavel] Auction Price: 1s 90c" and raw[2]:find("|cff808080Auction Price:|r |cff77777c1|r", 1, true) ~= nil
+    and raw[2]:find("|cff8e633990|r", 1, true) ~= nil, Lines(raw))
+  Check("...the stack's prices when the game gives the stack's, the verdict under them", under[3]:find("Vendor it  >>  vendor 1s 60c", 1, true) ~= nil
+    and #all == 4, Lines(all))
+  under = Sold(111, 16)
+  Check("one item's prices when the game gives one item's", under[1] == "> g Sell Price: 16c" and under[2] == "[gavel] Auction Price: 19c", Lines(under))
+  under = Sold(111, 16)
+  Check("...and all again the next time the tooltip is built", under[2] == "[gavel] Auction Price: 19c" and #under == 4, Lines(under))
+  under = Sold(131, 900)   -- to disenchant
+  Check("disenchant it: the pointer on the disenchant line, the other two dimmed", under[1] == "g Sell Price: 9s"
+    and under[2] == "[gavel] Auction Price: 9s" and under[3] == "> [dust] Disenchant: 25s"
+    and under[4]:find("Disenchant it", 1, true) ~= nil, Lines(under))
+  under, all = Sold(111, 16, true)
+  Check("an item the game can't name yet: its line left alone, the rest at the end", #under == 1 and under[1] == " "
+    and all[2] == "[gavel] Auction Price: 19c" and all[3]:find("Vendor it", 1, true) ~= nil and #all == 3, Lines(all))
+  under, all = Sold(108, 9)
+  Check("nothing to say: the Sell Price line alone, undimmed, no blank line", #all == 1 and all[1] == "g Sell Price: 9c", Lines(all))
+  SHIFT = true
+  under, all = Sold(111, 16)
+  SHIFT = false
+  Check("with Shift held, the reason in full in the block", under[3]:find("Smooth Brain:", 1, true) ~= nil
+    and under[4]:find("Buying them back costs", 1, true) ~= nil and under[5] == " " and #all == 5, Lines(all))
+  ownLine = false   -- a game whose tooltip lines can't be reached: its own line recoloured instead
+  under, all, raw = Sold(112, 400)
+  Check("where the line can't be written, the game's own is recoloured: dimmed, as it lost", under[1] == " "
+    and moneyFrame.hidden == false and moneyFrame.PrefixText.colour[1] == 0.5 and moneyFrame.GoldButton.Text.colour[1] == 0.6,
+    table.concat(moneyFrame.PrefixText.colour, ","))
+  under = Sold(111, 160)
+  Check("...or bright, as it won", moneyFrame.PrefixText.colour[2] == 0.82 and moneyFrame.GoldButton.Text.colour[2] == 0.84
+    and moneyFrame.CopperButton.Text.colour[1] == 0.93, table.concat(moneyFrame.PrefixText.colour, ","))
+  GameTooltip.cleared(GameTooltip)
+  Check("...and gets its own colours back when the tooltip is cleared", moneyFrame.PrefixText.colour[2] == 1
+    and moneyFrame.GoldButton.Text.colour[3] == 1, table.concat(moneyFrame.PrefixText.colour, ","))
+  ownLine = true
+  SlashCmdList.SMOOTHBRAIN("pricelines off")
+  under, all = Sold(111, 16)
+  Check("/smooth pricelines off: the game's line as it was, and the verdict at the end as before", #under == 1 and under[1] == " "
+    and moneyFrame.hidden == false and #all == 2 and all[2]:find("Vendor it", 1, true) ~= nil and SmoothBrainDB.pricelines == false,
+    Lines(all))
+  SlashCmdList.SMOOTHBRAIN("pricelines on")
+  Check("/smooth pricelines on: back", Sold(111, 16)[2] == "[gavel] Auction Price: 19c")
+end
 
 -- Markers
 local COIN, GAVEL, TICK = "Interface\\MoneyFrame\\UI-GoldIcon", "Interface\\AddOns\\SmoothBrain\\auction", "Interface\\RaidFrame\\ReadyCheck-Ready"

@@ -1,13 +1,13 @@
 ## Interface: 16001
 ## Title: Smooth Brain
-## Notes: Stop thinking about your bags. Every item gets a marker: vendor, auction, disenchant, keep, keep for a quest, or delete. Uses TradeSkillMaster's or Auctionator's prices, RestedXP's guides and Questie's quest data. /smooth setup to begin.
-## Version: 2.10
+## Notes: Stop thinking about your bags. Every item gets a marker: vendor, auction, disenchant, keep, keep for a quest, or delete. Uses TradeSkillMaster's, Auctionator's or Forever Companion's prices, RestedXP's guides and Questie's quest data. /smooth setup to begin.
+## Version: 2.11
 ## Author: Am0n3r
 ## X-License: MIT
 ## X-Curse-Project-ID: 1799946
 ## Category: Bags & Inventory
 ## IconTexture: Interface\AddOns\SmoothBrain\auction
-## OptionalDeps: TradeSkillMaster, Auctionator, RXPGuides, Questie, Bagnon, Baganator, BetterBags, EllesmereUIBags
+## OptionalDeps: TradeSkillMaster, Auctionator, ForeverCompanion, RXPGuides, Questie, Bagnon, Baganator, BetterBags, EllesmereUIBags
 ## SavedVariables: SmoothBrainDB
 
 Logic.lua

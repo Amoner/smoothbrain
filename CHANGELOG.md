@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.11
+
+- **New: the verdict and all three prices in one block near the top of the
+  tooltip.** Sell Price, Auction Price and Disenchant sit together right
+  where the game shows the sell price, each with its bag-slot marker, then
+  the verdict, then a blank line to set the block apart. The price the
+  verdict went by gets a pointer; the others are dimmed. Labels are gold,
+  amounts in their coins' colours. Prices are for one item or the stack,
+  whichever the game's line is for. `/smooth pricelines off` gives the game
+  its own Sell Price line back and puts the verdict at the bottom again.
+- Forever Companion is listed among the addons Smooth Brain can use, so it
+  loads first when both are installed.
+
 ## 2.10
 
 - **New: an arrow to the nearest vendor.** While you carry something marked
